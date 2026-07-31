@@ -28,7 +28,9 @@
 // Size of statusbar.
 // Now sensitive for scaling.
 #define ST_HEIGHT	32
-#define ST_WIDTH	SCREENWIDTH
+// The STBAR graphic in the WAD is 320px wide regardless of screen width, so
+// this is NOT SCREENWIDTH. At 400 wide it is centred; see ST_X in st_stuff.c.
+#define ST_WIDTH	320
 #define ST_Y		(SCREENHEIGHT - ST_HEIGHT)
 
 

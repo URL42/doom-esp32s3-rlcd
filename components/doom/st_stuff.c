@@ -80,7 +80,9 @@
 #define ST_TOGGLECHAT		KEY_ENTER
 
 // Location of status bar
-#define ST_X				0
+// Centre the 320px status bar on a wider screen rather than pinning it left,
+// which would leave the whole right-hand side empty.
+#define ST_X				((SCREENWIDTH - ST_WIDTH) / 2)
 #define ST_X2				104
 
 #define ST_FX  			143

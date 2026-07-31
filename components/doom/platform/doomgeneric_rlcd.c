@@ -117,8 +117,8 @@ static uint8_t *s_panel_fb;
 void DG_DrawFrame(void)
 {
     if (s_panel_fb != NULL) {
-        // Doom's 320x200 frame is centred in the 400x300 panel; the surrounding
-        // border was cleared once at init and is never redrawn.
+        // Doom now renders at the panel's full 400x300, so this covers every
+        // pixel and the centring offsets are zero.
         for (int y = 0; y < DOOMGENERIC_RESY; y++) {
             const uint8_t *row = DG_ScreenBuffer + (size_t)y * DOOMGENERIC_RESX;
             const int py = RLCD_FRAME_Y + y;
@@ -361,6 +361,22 @@ static void PumpConsole(void)
         if (c == 0x1b) {
             esc_state = 1;  // Might be an arrow; decide on the next byte.
             esc_seen_ms = DG_GetTicksMs();
+            continue;
+        }
+
+        // Panel tuning keys, intercepted before the game sees them. Contrast on
+        // a reflective LCD depends on ambient light, so it needs to be adjusted
+        // while looking at the screen rather than fixed at compile time.
+        if (c == '[' || c == ']') {
+            float g = DG_GetGamma() + (c == ']' ? 0.2f : -0.2f);
+            DG_SetGamma(g);
+            ESP_LOGW(TAG, "gamma -> %.2f  (]=darker, [=lighter)", (double)DG_GetGamma());
+            continue;
+        }
+        if (c == '\\') {
+            static int mode;
+            mode = !mode;
+            DG_SetDither(mode ? DG_DITHER_THRESHOLD : DG_DITHER_BAYER);
             continue;
         }
 

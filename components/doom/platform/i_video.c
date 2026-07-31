@@ -38,6 +38,8 @@ rcsid[] = "$Id: i_x.c,v 1.6 1997/02/03 22:45:10 b1 Exp $";
 
 #include "doomgeneric.h"
 
+#include <math.h>
+
 #include <stdbool.h>
 #include <stdlib.h>
 
@@ -129,6 +131,13 @@ typedef struct
 // Doom's palette reduced to luminance. Declared in doomgeneric.h; the blit
 // dithers these brightnesses down to the panel's single bit per pixel.
 uint8_t DG_Palette[256];
+
+// Contrast control for the 1-bit panel. >1 darkens midtones (more ink), <1
+// lightens. Tunable at runtime via DG_SetGamma so it can be dialled in against
+// real ambient light rather than guessed at.
+static float s_gamma = 2.4f;
+static byte s_last_palette[768];
+static int  s_have_palette;
 
 void I_InitGraphics (void)
 {
@@ -252,6 +261,11 @@ void I_ReadScreen (byte* scr)
 
 void I_SetPalette (byte* palette)
 {
+	// Keep a copy so DG_SetGamma can rebuild the table without waiting for the
+	// game to change palettes on its own.
+	memcpy(s_last_palette, palette, sizeof(s_last_palette));
+	s_have_palette = 1;
+
 	// The panel is monochrome, so colour is reduced to perceptual luminance
 	// using the usual Rec.601 weights: green dominates because the eye is most
 	// sensitive to it. A flat (R+G+B)/3 average would wash out Doom's greens
@@ -265,7 +279,21 @@ void I_SetPalette (byte* palette)
 		unsigned b = palette[2];
 
 		unsigned y = (306u * r + 601u * g + 117u * b) >> 10;   // ~0.299/0.587/0.114
-		DG_Palette[i] = (uint8_t)(y > 255u ? 255u : y);
+		if (y > 255u) y = 255u;
+
+		// Gamma-darken before dithering.
+		//
+		// A reflective LCD has far less dynamic range than a backlit one, and
+		// mapping luminance straight through an ordered dither leaves the image
+		// washed out -- most of Doom's midtones land above the Bayer thresholds
+		// and simply never lay down ink. Raising luminance to a power > 1 pushes
+		// midtones down so they actually cross a threshold, which is what gives
+		// the picture its contrast back. Pure white and pure black are fixed
+		// points, so highlights and shadows are not clipped.
+		float n = powf((float)y / 255.0f, s_gamma);
+		unsigned out = (unsigned)(n * 255.0f + 0.5f);
+
+		DG_Palette[i] = (uint8_t)(out > 255u ? 255u : out);
 
 		palette += 3;
 	}
@@ -343,4 +371,21 @@ void I_DisplayFPSDots (boolean dots_on)
 
 void I_CheckIsScreensaver (void)
 {
+}
+
+// Adjust panel contrast at runtime and rebuild the luminance table.
+void DG_SetGamma(float gamma)
+{
+	if (gamma < 0.2f) gamma = 0.2f;
+	if (gamma > 6.0f) gamma = 6.0f;
+	s_gamma = gamma;
+
+	if (s_have_palette) {
+		I_SetPalette(s_last_palette);
+	}
+}
+
+float DG_GetGamma(void)
+{
+	return s_gamma;
 }

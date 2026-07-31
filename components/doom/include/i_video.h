@@ -24,8 +24,8 @@
 
 // Screen width and height.
 
-#define SCREENWIDTH  320
-#define SCREENHEIGHT 200
+#define SCREENWIDTH  400   // native panel width (was 320)
+#define SCREENHEIGHT 300   // native panel height (was 200)
 
 // Screen width used for "squash" scale functions
 
