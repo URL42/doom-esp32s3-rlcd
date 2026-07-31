@@ -127,9 +127,24 @@ void DG_DrawFrame(void)
         for (int y = 0; y < DOOMGENERIC_RESY; y++) {
             const uint8_t *row = DG_ScreenBuffer + (size_t)y * DOOMGENERIC_RESX;
 
-            for (int x = 0; x < DOOMGENERIC_RESX; x++) {
-                uint8_t luma = DG_Palette[row[x]];
-                ST7305_SetPixel(s_panel_fb, y, x, s_dither(x, y, luma));
+            // Hoist the Bayer row: y is constant across this loop, so the
+            // matrix row is fixed and only the low 3 bits of x select within it.
+            const uint8_t *brow = &bayer8[(y & 7) << 3];
+
+            if (s_dither == DitherBayer) {
+                // Fast path. The generic version called through a function
+                // pointer once per pixel -- 120000 indirect calls a frame, none
+                // of them inlinable. This is the same arithmetic with the call
+                // removed.
+                for (int x = 0; x < DOOMGENERIC_RESX; x++) {
+                    ST7305_SetPixel(s_panel_fb, y, x,
+                                    DG_Palette[row[x]] < brow[x & 7]);
+                }
+            } else {
+                for (int x = 0; x < DOOMGENERIC_RESX; x++) {
+                    ST7305_SetPixel(s_panel_fb, y, x,
+                                    s_dither(x, y, DG_Palette[row[x]]));
+                }
             }
         }
 
