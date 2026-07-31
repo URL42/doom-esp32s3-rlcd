@@ -633,8 +633,24 @@ void S_ChangeMusic(int musicnum, int looping)
     // get lumpnum if neccessary
     if (!music->lumpnum)
     {
+        int lump;
+
         M_snprintf(namebuf, sizeof(namebuf), "d_%s", DEH_String(music->name));
-        music->lumpnum = W_GetNumForName(namebuf);
+
+        // Vanilla uses W_GetNumForName here, which I_Errors on a missing lump.
+        // That is reasonable on a desktop with a complete IWAD, but fatal on a
+        // board whose WAD may have been trimmed to fit flash -- a missing music
+        // track should degrade to silence, not kill the game at level start.
+        //
+        // Leave music->lumpnum at 0 rather than storing -1: the guard above
+        // tests it as a boolean, so -1 would read as "already resolved" and
+        // send W_CacheLumpNum(-1) straight into I_Error on the next call.
+        lump = W_CheckNumForName(namebuf);
+        if (lump < 0)
+        {
+            return;
+        }
+        music->lumpnum = lump;
     }
 
     music->data = W_CacheLumpNum(music->lumpnum, PU_STATIC);

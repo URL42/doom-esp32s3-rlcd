@@ -14,6 +14,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -314,6 +316,12 @@ int DG_GetKey(int *pressed, unsigned char *key)
     *pressed = key_queue_pressed[key_queue_tail];
     *key = key_queue[key_queue_tail];
     key_queue_tail = (key_queue_tail + 1) % KEY_QUEUE_LEN;
+
+    // Bring-up aid: with no panel there is no other way to see that a keystroke
+    // reached the game. ESP_LOGD so it costs nothing unless the log level is
+    // raised (CONFIG_LOG_MAXIMUM_LEVEL / esp_log_level_set).
+    ESP_LOGD(TAG, "key 0x%02x %s", *key, *pressed ? "down" : "up");
+
     return 1;
 }
 
@@ -327,6 +335,28 @@ void DG_Init(void)
     // for a keypress. The UART VFS driver honours O_NONBLOCK on the underlying
     // fd; unbuffering stdio stops libc from doing its own blocking refill.
     setvbuf(stdin, NULL, _IONBF, 0);
+
+    // Install the USB-Serial-JTAG driver and route the VFS through it. This is
+    // not optional, and the reason is not obvious:
+    //
+    // Without the driver, usb_serial_jtag_get_read_bytes_available() returns 0
+    // unconditionally (it only inspects the driver's RX ring buffer, which does
+    // not exist). The VFS non-blocking read path consults *only* that function
+    // to decide how much to fetch, and the no-driver FIFO reader is reached
+    // solely from the blocking branch. So with O_NONBLOCK set and no driver,
+    // read() returns EWOULDBLOCK forever no matter what the host sent -- log
+    // output works perfectly and input silently never arrives.
+    usb_serial_jtag_driver_config_t usj_cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+    usj_cfg.rx_buffer_size = 256;   // a few keystrokes is plenty
+    usj_cfg.tx_buffer_size = 1024;  // logging is chattier than input
+
+    esp_err_t err = usb_serial_jtag_driver_install(&usj_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "usb_serial_jtag_driver_install failed: %s -- no input",
+                 esp_err_to_name(err));
+    } else {
+        usb_serial_jtag_vfs_use_driver();
+    }
 
     int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
     if (flags < 0 || fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK) < 0) {
@@ -353,4 +383,8 @@ void DG_Init(void)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
     ESP_LOGW(TAG, "display is a STUB -- panel driver IC unknown, nothing will be drawn");
+
+    // Keep key tracing visible during bring-up without turning on debug logging
+    // globally. Drop this once there is a panel to watch instead.
+    esp_log_level_set(TAG, ESP_LOG_DEBUG);
 }

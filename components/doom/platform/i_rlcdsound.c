@@ -71,7 +71,11 @@ static int I_RLCD_GetSfxLumpNum(sfxinfo_t *sfx)
         M_StringCopy(namebuf, DEH_String(sfx->name), sizeof(namebuf));
     }
 
-    return W_GetNumForName(namebuf);
+    // W_CheckNumForName, not W_GetNumForName: the latter I_Errors on a missing
+    // lump. S_StartSound stores this in sfx->lumpnum, which is initialised to
+    // -1 and re-queried whenever it is negative, so returning -1 for an absent
+    // sound is handled cleanly upstream and simply stays silent.
+    return W_CheckNumForName(namebuf);
 }
 
 static void I_RLCD_UpdateSound(void)
