@@ -33,6 +33,7 @@
 #include "m_menu.h"
 
 #include "r_local.h"
+#include "st_stuff.h"   // ST_HEIGHT, for scaling the view to the real screen
 #include "r_sky.h"
 
 
@@ -688,8 +689,13 @@ void R_ExecuteSetViewSize (void)
     }
     else
     {
-	scaledviewwidth = setblocks*32;
-	viewheight = (setblocks*168/10)&~7;
+	// Vanilla writes setblocks*32 and setblocks*168/10 here: 32 is 320/10 and
+	// 168 is 200 minus the 32-row status bar, both baked for a 320x200 screen.
+	// On a larger screen that pins the view at 320x168 no matter how big the
+	// display is, which looks like the game failing to fill the panel. Scale
+	// them from the actual screen instead.
+	scaledviewwidth = setblocks * SCREENWIDTH / 10;
+	viewheight = (setblocks * (SCREENHEIGHT - ST_HEIGHT) / 10) & ~7;
     }
     
     detailshift = setdetail;

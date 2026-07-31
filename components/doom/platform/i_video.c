@@ -139,7 +139,7 @@ uint8_t DG_Palette[256];
 // compensating for an inverted image; with 0x20 restored, anything above ~1
 // lays down far too much ink and the picture goes to mostly-black. Tune with
 // [ and ] against real ambient light.
-static float s_gamma = 1.0f;
+static float s_gamma = 0.8f;
 static byte s_last_palette[768];
 static int  s_have_palette;
 
