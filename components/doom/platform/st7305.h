@@ -59,14 +59,27 @@ void ST7305_TestPattern(uint8_t *packed, int hold_ms);
 
 // Set one pixel in a packed buffer. `black` selects ink rather than background.
 // Coordinates are landscape 0..399 x 0..299. Bounds-checked.
+// Pixel mapping variant. Two are dimensionally valid for a 15000-byte buffer:
+//   0 = column-major  index = (x/2)*75 + (y/4)      -- x is the major axis
+//   1 = row-major     index = (y/4)*200 + (x/2)     -- y is the major axis
+// They differ by a 90 degree rotation on the glass. Which one the controller
+// actually wants is not something the datasheet excerpts settle, so it is
+// selectable at runtime rather than guessed. Bit 1 flips the Y inversion.
+extern int ST7305_Mapping;
+
 static inline void ST7305_SetPixel(uint8_t *packed, int x, int y, bool black)
 {
     if ((unsigned)x >= ST7305_W || (unsigned)y >= ST7305_H) {
         return;
     }
-    // The panel is mounted upside down relative to our coordinate system.
-    int dy = ST7305_H - 1 - y;
-    uint32_t index = (uint32_t)(x >> 1) * ST7305_BLOCKS_Y + (dy >> 2);
+    int dy = (ST7305_Mapping & 2) ? y : (ST7305_H - 1 - y);
+
+    uint32_t index;
+    if (ST7305_Mapping & 1) {
+        index = (uint32_t)(dy >> 2) * (ST7305_W / 2) + (uint32_t)(x >> 1);
+    } else {
+        index = (uint32_t)(x >> 1) * ST7305_BLOCKS_Y + (uint32_t)(dy >> 2);
+    }
     uint8_t  bit   = 7u - (uint8_t)(((dy & 3) << 1) + (x & 1));
 
     if (black) {

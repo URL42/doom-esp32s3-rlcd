@@ -41,6 +41,8 @@ static const char *TAG = "st7305";
 #define CMD_RASET 0x2B
 #define CMD_RAMWR 0x2C
 
+int ST7305_Mapping = 0;
+
 static spi_device_handle_t s_spi;
 static bool s_ready;
 
@@ -115,7 +117,12 @@ static esp_err_t panel_init_sequence(void)
 
     W(0xD6, 0x13, 0x02);                       // NVM load control
     W(0xD1, 0x01);                             // booster enable
-    W(0xC0, 0x11, 0x04);                       // gate voltage (reference driver's values)
+    // Gate voltage VGH/VGL. Back to Waveshare's 0x12,0x0A -- these are tuned by
+    // the panel manufacturer for THIS glass. The esp_lcd reference driver's
+    // 0x11,0x04 is a lower drive and visibly reduces contrast; swapping it in
+    // was a mistake, since the register has nothing to do with the write path
+    // that change was meant to fix.
+    W(0xC0, 0x12, 0x0A);
     W(0xC1, 0x3C, 0x3E, 0x3C, 0x3C);           // VSHP 1..4 = 4.8V
     W(0xC2, 0x23, 0x21, 0x23, 0x23);           // VSLP 1..4 = 0.98V
     W(0xC4, 0x5A, 0x5C, 0x5A, 0x5A);           // VSHN 1..4 = -3.6V

@@ -373,6 +373,13 @@ static void PumpConsole(void)
             ESP_LOGW(TAG, "gamma -> %.2f  (]=darker, [=lighter)", (double)DG_GetGamma());
             continue;
         }
+        if (c == 'o' || c == 'O') {
+            ST7305_Mapping = (ST7305_Mapping + 1) & 3;
+            ESP_LOGW(TAG, "pixel mapping -> %d (%s, y%s)", ST7305_Mapping,
+                     (ST7305_Mapping & 1) ? "row-major" : "column-major",
+                     (ST7305_Mapping & 2) ? "-normal" : "-inverted");
+            continue;
+        }
         if (c == '\\') {
             static int mode;
             mode = !mode;
