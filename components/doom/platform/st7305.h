@@ -17,27 +17,29 @@
 
 #include "esp_err.h"
 
-// Panel geometry in the landscape orientation we drive it in.
-#define ST7305_W 400
-#define ST7305_H 300
-
-// The controller packs a 2(x) x 4(y) block of pixels into each byte, and the
-// buffer is column-major over those blocks:
+// Panel geometry in the controller's NATIVE orientation: 300 wide, 400 tall.
 //
-//     index = (x / 2) * (ST7305_H / 4) + (y / 4)
-//     bit   = 7 - ((y % 4) * 2 + (x % 2))
-//
-// which comes to (400/2) * (300/4) = 200 * 75 = 15000 bytes for a full frame --
-// exactly 400*300/8, as it must be for 1bpp.
-#define ST7305_BLOCKS_Y   (ST7305_H / 4)                 // 75
-#define ST7305_FB_BYTES   ((ST7305_W / 2) * ST7305_BLOCKS_Y)  // 15000
+// Earlier revisions called the 400-pixel axis "width" and treated the panel as
+// 400x300 landscape. The packing was right -- the image was recognisable -- but
+// the axes were named backwards, so everything appeared rotated 90 degrees. The
+// rotation belongs in the blit, not in the addressing.
+#define ST7305_W 300
+#define ST7305_H 400
 
-// The same buffer viewed the way the controller addresses it: in the panel's
-// native portrait orientation it is row-major, 200 addressable rows of 75 bytes.
-// index = (y_portrait / 2) * 75 + (x_portrait / 4), which is exactly what the
-// landscape formula above collapses to after rotation.
-#define ST7305_ROW_BYTES  ST7305_BLOCKS_Y                // 75
-#define ST7305_ROWS       (ST7305_W / 2)                 // 200
+// Each byte holds a 4(x) x 2(y) block of pixels in native orientation, and the
+// buffer is row-major over those blocks:
+//
+//     index = (y / 2) * 75 + (x / 4)
+//     bit   = 7 - ((x % 4) * 2 + (y % 2))
+//
+// (300/4) * (400/2) = 75 * 200 = 15000 bytes = 300*400/8, as it must be for 1bpp.
+#define ST7305_ROW_BYTES  (ST7305_W / 4)                 // 75
+#define ST7305_ROWS       (ST7305_H / 2)                 // 200
+#define ST7305_FB_BYTES   (ST7305_ROW_BYTES * ST7305_ROWS)  // 15000
+
+// Flip control, kept runtime-adjustable: bit0 mirrors X, bit1 mirrors Y. Which
+// way round the glass is mounted is not something the datasheet settles.
+extern int ST7305_Mapping;
 
 // Bring up SPI and initialise the panel. Safe to call once.
 esp_err_t ST7305_Init(void);
@@ -67,20 +69,18 @@ void ST7305_TestPattern(uint8_t *packed, int hold_ms);
 // selectable at runtime rather than guessed. Bit 1 flips the Y inversion.
 extern int ST7305_Mapping;
 
+// Set one pixel, in NATIVE PORTRAIT coordinates: x 0..299, y 0..399.
+// Callers wanting a landscape image rotate on the way in; see DG_DrawFrame.
 static inline void ST7305_SetPixel(uint8_t *packed, int x, int y, bool black)
 {
     if ((unsigned)x >= ST7305_W || (unsigned)y >= ST7305_H) {
         return;
     }
-    int dy = (ST7305_Mapping & 2) ? y : (ST7305_H - 1 - y);
+    if (ST7305_Mapping & 1) x = ST7305_W - 1 - x;
+    if (ST7305_Mapping & 2) y = ST7305_H - 1 - y;
 
-    uint32_t index;
-    if (ST7305_Mapping & 1) {
-        index = (uint32_t)(dy >> 2) * (ST7305_W / 2) + (uint32_t)(x >> 1);
-    } else {
-        index = (uint32_t)(x >> 1) * ST7305_BLOCKS_Y + (uint32_t)(dy >> 2);
-    }
-    uint8_t  bit   = 7u - (uint8_t)(((dy & 3) << 1) + (x & 1));
+    uint32_t index = (uint32_t)(y >> 1) * ST7305_ROW_BYTES + (uint32_t)(x >> 2);
+    uint8_t  bit   = 7u - (uint8_t)(((x & 3) << 1) + (y & 1));
 
     if (black) {
         packed[index] |= (uint8_t)(1u << bit);

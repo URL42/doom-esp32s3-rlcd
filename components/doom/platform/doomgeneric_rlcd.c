@@ -117,22 +117,22 @@ static uint8_t *s_panel_fb;
 void DG_DrawFrame(void)
 {
     if (s_panel_fb != NULL) {
-        // Doom now renders at the panel's full 400x300, so this covers every
-        // pixel and the centring offsets are zero.
+        // Rotate on the way in.
+        //
+        // Doom renders 400x300 landscape; the panel is addressed 300x400
+        // portrait. The rotation is a coordinate swap at blit time -- Doom's
+        // (x, y) becomes the panel's (y, x) -- rather than anything to do with
+        // how bytes are packed. Getting this backwards is what put the picture
+        // on its side for several rounds.
         for (int y = 0; y < DOOMGENERIC_RESY; y++) {
             const uint8_t *row = DG_ScreenBuffer + (size_t)y * DOOMGENERIC_RESX;
-            const int py = RLCD_FRAME_Y + y;
 
             for (int x = 0; x < DOOMGENERIC_RESX; x++) {
                 uint8_t luma = DG_Palette[row[x]];
-                ST7305_SetPixel(s_panel_fb, RLCD_FRAME_X + x, py,
-                                s_dither(x, y, luma));
+                ST7305_SetPixel(s_panel_fb, y, x, s_dither(x, y, luma));
             }
         }
 
-        // TODO(TE): LCD_TE (GPIO6) is configured as an input but not yet waited
-        // on. Tearing should be checked on real hardware before deciding whether
-        // syncing to it is worth the added latency at 32Hz.
         ST7305_Flush(s_panel_fb);
     }
 

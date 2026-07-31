@@ -41,7 +41,9 @@ static const char *TAG = "st7305";
 #define CMD_RASET 0x2B
 #define CMD_RAMWR 0x2C
 
-int ST7305_Mapping = 0;
+// Default 1 (row-major). The column-major variant put the image on screen but
+// rotated 90 degrees, and these two mappings differ by exactly that rotation.
+int ST7305_Mapping = 1;
 
 static spi_device_handle_t s_spi;
 static bool s_ready;
