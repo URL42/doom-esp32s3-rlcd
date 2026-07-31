@@ -1,7 +1,16 @@
 # DOOM on the Waveshare ESP32-S3-RLCD-4.2
 
+<img src="Doom_cover_art.jpg" alt="Doom" width="200" align="right">
+
 1993 Doom running on an ESP32-S3 driving a 4.2" **fully reflective** LCD — no backlight,
 300×400 native portrait, over SPI.
+
+Renders at ~32 fps, which is the panel's refresh rate — the CPU is not the limit.
+
+<br clear="right">
+
+> Cover art © id Software. The Doom *engine* is GPLv2; the artwork and game data are not,
+> and no WAD is distributed here.
 
 Built on [`ozkl/doomgeneric`](https://github.com/ozkl/doomgeneric) via
 [`bane9/ESP_DOOM`](https://github.com/bane9/ESP_DOOM), rebuilt for **ESP-IDF v5** and
@@ -21,15 +30,13 @@ retargeted from an ILI9341 TFT to this board.
 | Input over USB-Serial-JTAG | working |
 | Sound — game-side logic | working — channels, distance attenuation live |
 | Sound — audio output (ES8311) | **stub**, silent |
-| **Display** | **stub — nothing is drawn yet** |
+| Display (ST7305, 1 bpp, Bayer dither) | working — ~32 fps, panel-limited |
 
-### Why the screen is blank
+### The panel
 
-Deliberate, not a bug. The driver was held back until the panel controller could be
-identified from a real source rather than guessed at — an init sequence written from memory
-would be for the wrong chip. `DG_DrawFrame` currently counts frames and logs timing.
-
-The panel has since been identified as an **ST7305**, confirmed by Waveshare's own demo
+The display driver was deliberately held back until the controller could be identified from a
+real source rather than guessed at — an init sequence written from memory would have been for
+the wrong chip. It is an **ST7305**, confirmed by Waveshare's own demo
 source ([`waveshareteam/ESP32-S3-RLCD-4.2`](https://github.com/waveshareteam/ESP32-S3-RLCD-4.2)),
 a Zephyr in-tree board port, and the u8g2 upstream driver
 ([olikraus/u8g2#2661](https://github.com/olikraus/u8g2/issues/2661)).
@@ -153,6 +160,24 @@ conversions instead of 64000.
 The frame is **not** scaled to fill the panel. `DOOMGENERIC_RESX/RESY` match Doom's 320×200
 exactly and the driver centres it by offsetting its write window (40 px horizontal, 50 px
 vertical within the 400×300 landscape frame). A `_Static_assert` enforces this.
+
+### Monochrome conversion is dithered, and switchable
+
+The panel has one bit per pixel, so `DG_Palette` holds perceptual luminance (Rec.601 weights)
+rather than colour. A flat RGB average would wash out Doom's greens and leave foliage and the
+HUD too dark.
+
+The 8-bit → 1-bit reduction sits behind a function pointer — `DG_SetDither(DG_DITHER_BAYER)`
+or `DG_DITHER_THRESHOLD` — so the options can be compared on the real panel rather than
+argued about.
+
+The default is a 4×4 ordered Bayer matrix, chosen for **temporal stability**: a given
+brightness always resolves the same way at a given screen position, so panning the view does
+not make flat surfaces crawl. Floyd–Steinberg produces better stills but reshuffles its whole
+pattern when the image shifts by a pixel, which reads as shimmering on a moving 3D image.
+
+A red damage flash still registers, incidentally — the flash palette raises luminance across
+the board, so the screen visibly brightens even with the hue gone.
 
 ### Input synthesises key releases on a timer
 
