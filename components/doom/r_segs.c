@@ -396,7 +396,14 @@ R_StoreWallRange
     
     // calculate rw_distance for scale calculation
     rw_normalangle = curline->angle + ANG90;
-    offsetangle = abs(rw_normalangle-rw_angle1);
+    // Vanilla writes abs(rw_normalangle - rw_angle1) here, but offsetangle is
+    // angle_t (unsigned), so abs() is a no-op and the clamp below never sees a
+    // "negative" angle folded back. The result is wrong wall scaling at certain
+    // viewing angles. Upstream Chocolate Doom fixes it the same way: reinterpret
+    // as signed to decide whether to negate.
+    offsetangle = rw_normalangle - rw_angle1;
+    if ((int)offsetangle < 0)
+        offsetangle = -offsetangle;
     
     if (offsetangle > ANG90)
 	offsetangle = ANG90;

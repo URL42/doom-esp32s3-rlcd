@@ -66,24 +66,34 @@ static uint32_t frames_window_start_ms;
 
 typedef int (*dither_fn)(int x, int y, uint8_t luma);
 
-// 4x4 ordered (Bayer) matrix, scaled to 0..255.
+// 8x8 ordered (Bayer) matrix, scaled to 0..255.
 //
-// Chosen as the default because it is *temporally stable*: a given brightness
-// always resolves the same way at a given screen position, so panning the view
-// does not make flat surfaces crawl. Error diffusion produces better stills but
-// reshuffles its whole pattern when the image shifts by a pixel, which on a
-// 32Hz reflective panel reads as shimmering. It is also branch-free and costs
-// one table lookup plus a compare.
-static const uint8_t bayer4[16] = {
-      8, 136,  40, 168,
-    200,  72, 232, 104,
-     56, 184,  24, 152,
-    248, 120, 216,  88,
+// 8x8 rather than 4x4: 64 distinct thresholds instead of 16. On a 1-bit panel
+// that is the difference between Doom's distance shading having gradations and
+// it banding into a few flat steps -- most visible in dark corridors, which are
+// exactly where a 4x4 matrix runs out of levels and goes to mush.
+//
+// Ordered rather than error-diffused, because it is *temporally stable*: a given
+// brightness always resolves the same way at a given screen position, so panning
+// the view does not make flat walls crawl. Error diffusion gives better stills
+// but reshuffles its entire pattern when the image shifts by one pixel.
+//
+// Values are the standard recursive Bayer construction (0..63) scaled by 4 and
+// offset by 2, so no threshold sits exactly at 0 or 255.
+static const uint8_t bayer8[64] = {
+      2, 130,  34, 162,  10, 138,  42, 170,
+    194,  66, 226,  98, 202,  74, 234, 106,
+     50, 178,  18, 146,  58, 186,  26, 154,
+    242, 114, 210,  82, 250, 122, 218,  90,
+     14, 142,  46, 174,   6, 134,  38, 166,
+    206,  78, 238, 110, 198,  70, 230, 102,
+     62, 190,  30, 158,  54, 182,  22, 150,
+    254, 126, 222,  94, 246, 118, 214,  86,
 };
 
 static int DitherBayer(int x, int y, uint8_t luma)
 {
-    return luma < bayer4[((y & 3) << 2) | (x & 3)];   // 1 = ink
+    return luma < bayer8[((y & 7) << 3) | (x & 7)];   // 1 = ink
 }
 
 // Straight 50% cut. Sharpest text, but Doom's distance shading collapses.
@@ -98,7 +108,7 @@ static dither_fn s_dither = DitherBayer;
 void DG_SetDither(int mode)
 {
     s_dither = (mode == DG_DITHER_THRESHOLD) ? DitherThreshold : DitherBayer;
-    ESP_LOGI(TAG, "dither mode -> %s", mode == DG_DITHER_THRESHOLD ? "threshold" : "bayer4");
+    ESP_LOGI(TAG, "dither mode -> %s", mode == DG_DITHER_THRESHOLD ? "threshold" : "bayer8");
 }
 
 // Packed 1bpp frame in the ST7305's own layout.
