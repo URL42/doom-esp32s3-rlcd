@@ -1,0 +1,227 @@
+# DOOM on the Waveshare ESP32-S3-RLCD-4.2
+
+1993 Doom running on an ESP32-S3 driving a 4.2" **fully reflective** LCD — no backlight,
+300×400 native portrait, over SPI.
+
+Built on [`ozkl/doomgeneric`](https://github.com/ozkl/doomgeneric) via
+[`bane9/ESP_DOOM`](https://github.com/bane9/ESP_DOOM), rebuilt for **ESP-IDF v5** and
+retargeted from an ILI9341 TFT to this board.
+
+---
+
+## Status
+
+| Subsystem | State |
+|---|---|
+| Build (`idf.py build`, esp32s3) | working |
+| Boot, 8 MB octal PSRAM | working — verified on hardware |
+| Zone heap in PSRAM | working — 3 MB, placement asserted at runtime |
+| WAD via `esp_partition_mmap` | working — full 5 MB window, zero-copy lumps |
+| Game loop | working — demo runs, ~70 fps with display stubbed |
+| Input over USB-Serial-JTAG | working |
+| Sound — game-side logic | working — channels, distance attenuation live |
+| Sound — audio output (ES8311) | **stub**, silent |
+| **Display** | **stub — nothing is drawn yet** |
+
+### Why the screen is blank
+
+Deliberate, not a bug. The driver was held back until the panel controller could be
+identified from a real source rather than guessed at — an init sequence written from memory
+would be for the wrong chip. `DG_DrawFrame` currently counts frames and logs timing.
+
+The panel has since been identified as an **ST7305**, confirmed by Waveshare's own demo
+source ([`waveshareteam/ESP32-S3-RLCD-4.2`](https://github.com/waveshareteam/ESP32-S3-RLCD-4.2)),
+a Zephyr in-tree board port, and the u8g2 upstream driver
+([olikraus/u8g2#2661](https://github.com/olikraus/u8g2/issues/2661)).
+
+| Panel fact | Value | Source |
+|---|---|---|
+| Controller | ST7305 | Waveshare demo, Zephyr, u8g2 |
+| Panel | 300×400 portrait, driven 400×300 landscape | Waveshare `user_config.h` |
+| Colour depth | **1 bpp, black and white** | Waveshare product spec |
+| SPI clock | 24 MHz | Waveshare ESP-IDF demo |
+| Refresh rate | **32 Hz** high-power mode, 1 Hz low-power | init reg `0xB2 = 0x12` |
+| Windowed update | supported — `0x2A`/`0x2B` address window, `0x2C` write | u8g2 driver |
+
+The significant consequence is **1 bpp**. Doom's 256-colour output has to be reduced to pure
+black and white, so the palette LUT becomes a luminance table plus a dither, not a colour
+conversion. Everything else — geometry, the 40/50 px window offsets, keeping the framebuffer
+8-bit indexed — was designed for this and carries over unchanged.
+
+At 32 Hz against Doom's 35 Hz tic rate, the panel is the constraint, as expected.
+
+---
+
+## Hardware
+
+**Waveshare ESP32-S3-RLCD-4.2** — ESP32-S3-WROOM-1-N16R8, 16 MB flash, 8 MB octal PSRAM.
+
+Pin assignments are taken from the official Waveshare schematic and treated as
+authoritative — see [`CLAUDE.md`](CLAUDE.md).
+
+| Bus | Pins |
+|---|---|
+| Display (SPI) | CS 40, RESET 41, SCL 11, SDA 12, RS/DC 5, TE 6 |
+| Audio (I2S) | MCLK 16, SCLK 9, LRCK 45, DSDIN 8, ASDOUT 10, PA_CTRL 46 |
+| I²C (shared) | SDA 13, SCL 14 |
+| TF card (SPI) | MOSI 21, SCK 38, MISO 39, CS 17 |
+| Buttons | BOOT 0, KEY 18 |
+
+Codec ES8311, mic ADC ES7210, amp NS4150B into a **mono** speaker connector.
+
+Two constraints worth knowing before planning peripherals: the Type-C port wires straight to
+GPIO19/20 as **native USB with no bridge chip**, and the board has **no 5 V boost**, so USB
+host mode needs 5 V injected on header pin 2. The radio is **BLE only** — no Bluetooth
+Classic, which rules out most game controllers.
+
+---
+
+## Build and flash
+
+Requires ESP-IDF **v5.x**.
+
+```bash
+. $IDF_PATH/export.sh
+idf.py set-target esp32s3
+idf.py build
+idf.py -p /dev/cu.usbmodem101 flash monitor
+```
+
+The WAD is **not** in this repo and is flashed separately to its own partition:
+
+```bash
+esptool.py -p /dev/cu.usbmodem101 write_flash 0x310000 doom1.wad
+```
+
+Shareware `DOOM1.WAD` (4,196,020 bytes) is the target. Note that ESP_DOOM's bundled
+`doom1-cut.wad` has had **all `DS*` and `D_*` lumps stripped**, so it plays but is silent by
+construction.
+
+`sdkconfig` is generated and gitignored — `sdkconfig.defaults` is the source of truth. Edit
+there, delete `sdkconfig`, then `idf.py reconfigure`; existing values otherwise win over the
+defaults file.
+
+---
+
+## Partition layout
+
+16 MB flash:
+
+| Name | Type | Offset | Size |
+|---|---|---|---|
+| `nvs` | data/nvs | `0x9000` | 24 K |
+| `phy_init` | data/phy | `0xf000` | 4 K |
+| `factory` | app | `0x10000` | 3 M |
+| `wad` | `0x42`/`0x06` | `0x310000` | 5 M |
+| `storage` | data/fat | `0x810000` | 7 M |
+
+The WAD partition is **5 MB, not 4**: shareware `DOOM1.WAD` is 4,196,020 bytes and a 4 MiB
+partition holds 4,194,304 — it overflows by 1,716 bytes. It is also 64 KB-aligned so the
+mapping starts on an MMU page boundary. Ultimate Doom (~12 MB) and Doom II (~14 MB) do not
+fit alongside a 3 MB app and would need the SD card.
+
+---
+
+## Design notes
+
+### The WAD is memory-mapped, and `W_CacheLumpNum` needed no patching
+
+Doom's WAD layer already has a zero-copy path, inherited from Chocolate Doom:
+
+```c
+if (lump->wad_file->mapped != NULL)
+    result = lump->wad_file->mapped + lump->position;
+```
+
+Hand it a `mapped` pointer and every lump read becomes a pointer into memory-mapped flash.
+All the work is in [`w_file.c`](components/doom/platform/w_file.c) producing that pointer.
+
+**There is deliberately no sliding mmap window.** `W_CacheLumpNum` hands out pointers the
+renderer holds across frames; moving the window would invalidate live pointers and surface as
+roaming graphical corruption rather than a clean failure. The `ESP_ERR_NO_MEM` fallback is
+therefore a different strategy — leave `mapped` NULL and read lumps into zone memory, where
+they stay put. On this board the full 5 MB map succeeds and the fallback is not needed.
+
+### The framebuffer stays 8-bit indexed
+
+Upstream doomgeneric expands to 32-bit XRGB and ESP_DOOM to RGB565; both pay a per-pixel
+lookup every frame. This port keeps Doom's native indexed output all the way to the panel and
+applies `DG_Palette` at blit time. Half the memory (64000 bytes), one less pass over the
+frame, and a full-screen palette effect — damage flash, invulnerability — costs 256
+conversions instead of 64000.
+
+The frame is **not** scaled to fill the panel. `DOOMGENERIC_RESX/RESY` match Doom's 320×200
+exactly and the driver centres it by offsetting its write window (40 px horizontal, 50 px
+vertical within the 400×300 landscape frame). A `_Static_assert` enforces this.
+
+### Input synthesises key releases on a timer
+
+Terminals send a byte stream, not key up/down events. The releases cannot be queued alongside
+their presses: `d_loop.c` runs `ProcessEvents()` to completion before `BuildTiccmd()`, so a
+press and release in the same pass set and clear `gamekeydown[k]` with nothing observing it in
+between. Movement, fire and use would silently never work **while menus still did**, because
+menus are edge-triggered on `ev_keydown`.
+
+So presses are held for 120 ms and released on a later call. Terminal auto-repeat extends the
+hold rather than re-pressing, which turns a held key into continuous motion.
+
+### USB-Serial-JTAG stdin needs the driver installed
+
+`usb_serial_jtag_get_read_bytes_available()` returns 0 unconditionally unless the driver is
+installed — it only inspects the driver's RX ring buffer. The VFS non-blocking read path
+consults only that function, and the no-driver FIFO reader is reachable solely from the
+blocking branch. With `O_NONBLOCK` and no driver, `read()` returns `EWOULDBLOCK` forever no
+matter what the host sent, while log output works perfectly. `DG_Init` installs the driver and
+calls `usb_serial_jtag_vfs_use_driver()`.
+
+### About that ~70 fps
+
+It is a scheduling artifact, **not** a render ceiling. `TryRunTics` returns early at a tic
+boundary specifically to let the screen update, giving roughly two display passes per 35 Hz
+tic, and the loop sleeps between them. The CPU has substantial headroom; the panel is expected
+to be the constraint.
+
+---
+
+## Controls (serial console)
+
+| Key | Action |
+|---|---|
+| `W` / `S` | forward / back |
+| `A` / `D` | strafe left / right |
+| `,` / `.` | turn left / right |
+| arrows | move / turn |
+| space | use |
+| `F` | fire |
+| `Enter`, `Esc`, `Tab` | menu, map |
+| `1`–`7` | weapons |
+
+Ctrl is not usable as fire over a serial console, hence `F`.
+
+---
+
+## Known issues
+
+- **`r_segs.c:399`** does `abs()` on an unsigned `angle_t`, which is a no-op. A real vanilla
+  bug that upstream Chocolate Doom fixed; it produces wrong wall scaling at certain angles and
+  will look like a display fault once there is a panel.
+- **`snd_cachesize` defaults to 64 MB** in `i_sound.c` — meaningless on this board and worth
+  reducing before the audio backend lands.
+- **`w_file_stdc.c`** is still compiled by the source glob and pulls `fopen`/`fread` in for a
+  path that can never run.
+- **`I_GetPaletteIndex`** reads byte-swapped palette entries and compares 8-bit against 5-bit
+  channels. Only reachable under `-testcontrols`.
+- IWAD discovery in `d_main.c` is commented out in favour of a hardcoded `doom1.wad`, so the
+  `-iwad` argument is dead (`-mb` beside it is live).
+
+---
+
+## Out of scope so far
+
+Panel driver, ES8311 audio output, USB host / controller input, savegames.
+
+---
+
+## Licence
+
+Doom source is **GPLv2** — see [`LICENSE`](LICENSE). Doom is © id Software.
