@@ -155,7 +155,12 @@ static esp_err_t panel_init_sequence(void)
     W(0xD0, 0xFF);                             // enable auto power down
     C(0x38);                                   // high power mode on
 
-    C(0x21);                                   // display inversion ON
+    // Inversion OFF, back to Waveshare's value for this panel. Switching this
+    // to 0x21 came from the esp_lcd reference while chasing an unrelated
+    // striping bug, and it inverts ink polarity: with a high gamma most pixels
+    // are ink, so an inverted panel renders them white and the picture washes
+    // out to sparse dark dots on white -- exactly the symptom.
+    C(0x20);
     C(0x29);                                   // display on
     W(0xBB, 0x4F);                             // enable clear RAM to 0
 

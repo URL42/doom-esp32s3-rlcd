@@ -135,7 +135,7 @@ uint8_t DG_Palette[256];
 // Contrast control for the 1-bit panel. >1 darkens midtones (more ink), <1
 // lightens. Tunable at runtime via DG_SetGamma so it can be dialled in against
 // real ambient light rather than guessed at.
-static float s_gamma = 3.2f;
+static float s_gamma = 1.9f;
 static byte s_last_palette[768];
 static int  s_have_palette;
 
