@@ -50,19 +50,29 @@
 // halves framebuffer memory and removes a whole pass over the frame.
 extern uint8_t *DG_ScreenBuffer;
 
-// Doom's 256-colour palette, pre-converted to whatever the panel wants.
+// Doom's 256-colour palette, reduced to perceptual luminance (0 = black,
+// 255 = white).
 //
-// Doom changes this at runtime -- damage flashes red, item pickups flash gold,
+// The panel is an ST7305: 1 bit per pixel, pure black and white, no colour at
+// all. So there is nothing to convert colour *to* -- each palette entry becomes
+// a brightness, and the blit dithers that brightness down to a single bit.
+//
+// Doom rewrites this at runtime -- damage flashes red, item pickups flash gold,
 // the invulnerability sphere inverts it -- by calling I_SetPalette with a new
-// 768-byte RGB triple table. Only these 256 entries change; the framebuffer
-// does not. That is exactly why keeping the frame indexed is cheap: a full
-// screen palette effect costs 256 conversions, not 64000.
+// 768-byte RGB triple table. Only these 256 entries change; the framebuffer does
+// not. That is why keeping the frame indexed pays off twice here: a full-screen
+// palette effect costs 256 luminance conversions rather than 64000.
 //
-// Stored RGB565 byte-swapped, because SPI panels take pixel data big-endian
-// and the S3 is little-endian. If the real panel turns out not to be 16bpp
-// (open unknown #2) this type changes and the display driver changes with it;
-// nothing in the game code cares.
-extern uint16_t DG_Palette[256];
+// A red damage flash does still read on a monochrome panel, incidentally: the
+// flash palette raises luminance across the board, so the screen visibly
+// brightens even though the hue is gone.
+extern uint8_t DG_Palette[256];
+
+// Which 8-bit -> 1-bit reduction the blit uses. Switchable so the two can be
+// compared on the real panel; see DG_DrawFrame.
+#define DG_DITHER_BAYER     0
+#define DG_DITHER_THRESHOLD 1
+void DG_SetDither(int mode);
 
 void DG_Init(void);
 void DG_DrawFrame(void);

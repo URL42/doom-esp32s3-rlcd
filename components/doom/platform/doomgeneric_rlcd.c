@@ -1,13 +1,13 @@
 //
 // doomgeneric platform layer for the Waveshare ESP32-S3-RLCD-4.2.
 //
-// Phase 0: everything except the panel. Input comes over the serial console so
-// the game is playable the moment a display driver exists, and DG_DrawFrame is
-// instrumented but draws nothing.
+// Input comes over the USB-serial console, which keeps it decoupled from the
+// panel. The display is an ST7305 reflective LCD -- see st7305.c.
 //
 
 #include "doomgeneric.h"
 #include "doomkeys.h"
+#include "st7305.h"
 
 #include <fcntl.h>
 #include <stdio.h>
@@ -49,25 +49,82 @@ void DG_SleepMs(uint32_t ms)
 }
 
 // ---------------------------------------------------------------------------
-// Display -- NOT IMPLEMENTED
+// Display
 // ---------------------------------------------------------------------------
 
 static uint32_t frame_count;
 static uint32_t frames_window_start_ms;
 
+// ---------------------------------------------------------------------------
+// Indexed -> 1bpp conversion
+// ---------------------------------------------------------------------------
+//
+// The panel has one bit per pixel, so Doom's 256 shades have to collapse to
+// black or white. Which reduction is used is a visible, arguable choice, so it
+// sits behind a function pointer and can be swapped at runtime to compare them
+// on the actual hardware rather than from a description.
+
+typedef int (*dither_fn)(int x, int y, uint8_t luma);
+
+// 4x4 ordered (Bayer) matrix, scaled to 0..255.
+//
+// Chosen as the default because it is *temporally stable*: a given brightness
+// always resolves the same way at a given screen position, so panning the view
+// does not make flat surfaces crawl. Error diffusion produces better stills but
+// reshuffles its whole pattern when the image shifts by a pixel, which on a
+// 32Hz reflective panel reads as shimmering. It is also branch-free and costs
+// one table lookup plus a compare.
+static const uint8_t bayer4[16] = {
+      8, 136,  40, 168,
+    200,  72, 232, 104,
+     56, 184,  24, 152,
+    248, 120, 216,  88,
+};
+
+static int DitherBayer(int x, int y, uint8_t luma)
+{
+    return luma < bayer4[((y & 3) << 2) | (x & 3)];   // 1 = ink
+}
+
+// Straight 50% cut. Sharpest text, but Doom's distance shading collapses.
+static int DitherThreshold(int x, int y, uint8_t luma)
+{
+    (void)x; (void)y;
+    return luma < 128;
+}
+
+static dither_fn s_dither = DitherBayer;
+
+void DG_SetDither(int mode)
+{
+    s_dither = (mode == DG_DITHER_THRESHOLD) ? DitherThreshold : DitherBayer;
+    ESP_LOGI(TAG, "dither mode -> %s", mode == DG_DITHER_THRESHOLD ? "threshold" : "bayer4");
+}
+
+// Packed 1bpp frame in the ST7305's own layout.
+static uint8_t *s_panel_fb;
+
 void DG_DrawFrame(void)
 {
-    // TODO(panel): This must not draw anything yet.
-    //
-    // The panel's driver IC is unknown -- it sits behind the FPC and does not
-    // appear in the Waveshare schematic. Any initialisation or command sequence
-    // written from memory would be for the wrong controller. This stays a stub
-    // until the Waveshare demo source or the panel datasheet is in hand.
-    //
-    // When that arrives, the work is: open a write window at
-    // (RLCD_FRAME_X, RLCD_FRAME_Y) sized DOOMGENERIC_RESX x DOOMGENERIC_RESY on
-    // a 400x300 landscape-rotated panel, wait on LCD_TE (GPIO6) for tear-free
-    // timing, and push DG_ScreenBuffer over SPI.
+    if (s_panel_fb != NULL) {
+        // Doom's 320x200 frame is centred in the 400x300 panel; the surrounding
+        // border was cleared once at init and is never redrawn.
+        for (int y = 0; y < DOOMGENERIC_RESY; y++) {
+            const uint8_t *row = DG_ScreenBuffer + (size_t)y * DOOMGENERIC_RESX;
+            const int py = RLCD_FRAME_Y + y;
+
+            for (int x = 0; x < DOOMGENERIC_RESX; x++) {
+                uint8_t luma = DG_Palette[row[x]];
+                ST7305_SetPixel(s_panel_fb, RLCD_FRAME_X + x, py,
+                                s_dither(x, y, luma));
+            }
+        }
+
+        // TODO(TE): LCD_TE (GPIO6) is configured as an input but not yet waited
+        // on. Tearing should be checked on real hardware before deciding whether
+        // syncing to it is worth the added latency at 32Hz.
+        ST7305_Flush(s_panel_fb);
+    }
 
     frame_count++;
 
@@ -76,7 +133,7 @@ void DG_DrawFrame(void)
         uint32_t elapsed = now - frames_window_start_ms;
         // Integer maths only: 100 frames in `elapsed` ms -> fps*100.
         uint32_t fps_x100 = elapsed ? (100u * 100u * 1000u) / elapsed : 0u;
-        ESP_LOGI(TAG, "frame %lu | 100 frames in %lu ms | %lu.%02lu fps (render only, no panel)",
+        ESP_LOGI(TAG, "frame %lu | 100 frames in %lu ms | %lu.%02lu fps",
                  (unsigned long)frame_count, (unsigned long)elapsed,
                  (unsigned long)(fps_x100 / 100u), (unsigned long)(fps_x100 % 100u));
         frames_window_start_ms = now;
@@ -382,7 +439,25 @@ void DG_Init(void)
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
-    ESP_LOGW(TAG, "display is a STUB -- panel driver IC unknown, nothing will be drawn");
+    // Panel. If this fails the game still runs headless rather than aborting --
+    // input and timing remain observable over the console, which is how the
+    // whole platform layer was brought up in the first place.
+    if (ST7305_Init() == ESP_OK) {
+        s_panel_fb = heap_caps_malloc(ST7305_FB_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+        if (s_panel_fb == NULL) {
+            ESP_LOGE(TAG, "no DMA-capable memory for the %d-byte panel buffer", ST7305_FB_BYTES);
+        } else {
+            // Clear once: the 40px side and 50px top/bottom borders around
+            // Doom's 320x200 frame never change, so they cost nothing per frame.
+            ST7305_ClearBuffer(s_panel_fb);
+            ST7305_Flush(s_panel_fb);
+            ESP_LOGI(TAG, "panel ready: %dx%d frame at (%d,%d) on a %dx%d panel",
+                     DOOMGENERIC_RESX, DOOMGENERIC_RESY,
+                     RLCD_FRAME_X, RLCD_FRAME_Y, ST7305_W, ST7305_H);
+        }
+    } else {
+        ESP_LOGE(TAG, "panel init failed -- running headless");
+    }
 
     // Keep key tracing visible during bring-up without turning on debug logging
     // globally. Drop this once there is a panel to watch instead.

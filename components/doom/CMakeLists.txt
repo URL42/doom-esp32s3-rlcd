@@ -10,7 +10,8 @@ file(GLOB PLATFORM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/platform/*.c)
 idf_component_register(
     SRCS ${DOOM_SOURCES} ${PLATFORM_SOURCES}
     INCLUDE_DIRS "include" "platform"
-    REQUIRES esp_partition esp_timer esp_system freertos heap log vfs esp_driver_usb_serial_jtag
+    REQUIRES esp_partition esp_timer esp_system freertos heap log vfs
+             esp_driver_usb_serial_jtag esp_driver_spi esp_driver_gpio
 )
 
 # 1993 C, compiled by GCC 14. None of these indicate a real defect in the game;

@@ -1,0 +1,236 @@
+//
+// ST7305 driver. See st7305.h for the packing description and provenance.
+//
+
+#include "st7305.h"
+
+#include <string.h>
+
+#include "driver/gpio.h"
+#include "driver/spi_master.h"
+#include "esp_check.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+static const char *TAG = "st7305";
+
+// Pins are fixed by the Waveshare schematic; see CLAUDE.md. These match
+// Waveshare's own user_config.h exactly.
+#define PIN_CS     40
+#define PIN_RESET  41
+#define PIN_SCL    11
+#define PIN_SDA    12
+#define PIN_DC      5
+#define PIN_TE      6
+
+// 24 MHz is what Waveshare's ESP-IDF demo uses for this panel.
+#define ST7305_SPI_HZ (24 * 1000 * 1000)
+
+#define ST7305_HOST SPI2_HOST
+
+// Address window covering the whole panel. The controller's column addresses
+// span 12 pixels each and its row addresses 2 lines each, so these cover the
+// full 300x400 native area; RAMWR then auto-increments through it.
+#define CASET_START 0x00
+#define CASET_END   0x2A
+#define RASET_START 0x00
+#define RASET_END   0xC7
+
+#define CMD_CASET 0x2A
+#define CMD_RASET 0x2B
+#define CMD_RAMWR 0x2C
+
+static spi_device_handle_t s_spi;
+static bool s_ready;
+
+static esp_err_t spi_tx(const uint8_t *data, size_t len, bool is_data)
+{
+    if (len == 0) {
+        return ESP_OK;
+    }
+    gpio_set_level(PIN_DC, is_data ? 1 : 0);
+
+    spi_transaction_t t = {
+        .length = len * 8,
+        .tx_buffer = data,
+    };
+    return spi_device_polling_transmit(s_spi, &t);
+}
+
+static esp_err_t wr_cmd(uint8_t cmd)
+{
+    return spi_tx(&cmd, 1, false);
+}
+
+static esp_err_t wr_args(const uint8_t *args, size_t n)
+{
+    return spi_tx(args, n, true);
+}
+
+// Convenience: command followed by n argument bytes.
+static esp_err_t wr(uint8_t cmd, const uint8_t *args, size_t n)
+{
+    esp_err_t e = wr_cmd(cmd);
+    if (e == ESP_OK && n) {
+        e = wr_args(args, n);
+    }
+    return e;
+}
+
+//
+// Initialisation sequence, transcribed from Waveshare's demo source for this
+// board. The comments are theirs (translated), and the values are tuned by the
+// panel manufacturer -- these are not generic ST7305 defaults, and guessing
+// them would produce a blank or badly-contrasted screen.
+//
+static esp_err_t panel_init_sequence(void)
+{
+    esp_err_t e;
+
+    #define W(cmd, ...) do { \
+        const uint8_t _a[] = { __VA_ARGS__ }; \
+        e = wr((cmd), _a, sizeof(_a)); \
+        if (e != ESP_OK) return e; \
+    } while (0)
+    #define C(cmd) do { e = wr_cmd(cmd); if (e != ESP_OK) return e; } while (0)
+
+    C(0x01);                                   // software reset
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    W(0xD6, 0x13, 0x02);                       // NVM load control
+    W(0xD1, 0x01);                             // booster enable
+    W(0xC0, 0x12, 0x0A);                       // gate voltage: VGH 15V, VGL -10V
+    W(0xC1, 0x3C, 0x3E, 0x3C, 0x3C);           // VSHP 1..4 = 4.8V
+    W(0xC2, 0x23, 0x21, 0x23, 0x23);           // VSLP 1..4 = 0.98V
+    W(0xC4, 0x5A, 0x5C, 0x5A, 0x5A);           // VSHN 1..4 = -3.6V
+    W(0xC5, 0x37, 0x35, 0x37, 0x37);           // VSLN 1..4 = 0.22V
+
+    W(0xD8, 0xA6, 0xE9);                       // OSC setting
+    W(0xB2, 0x12);                             // frame rate: HPM 32Hz, LPM 1Hz
+
+    // Update period gate EQ control, high-power mode
+    W(0xB3, 0xE5, 0xF6, 0x17, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x71);
+    // ...and low-power mode
+    W(0xB4, 0x05, 0x46, 0x77, 0x77, 0x77, 0x77, 0x77, 0x76, 0x45);
+
+    W(0x62, 0x32, 0x03, 0x1F);                 // gate timing control
+    W(0xB7, 0x13);                             // source EQ enable
+    W(0xB0, 0x64);                             // duty setting: 400 line
+
+    C(0x11);                                   // sleep out
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    W(0xC9, 0x00);                             // source voltage select
+    W(0x36, 0x48);                             // memory data access control
+    W(0x3A, 0x11);                             // data format select
+    W(0xB9, 0x20);                             // gamma mode: mono
+    W(0xB8, 0x29);                             // panel setting: 1-dot inversion
+
+    W(0x35, 0x00);                             // TE setting
+    W(0xD0, 0xFF);                             // enable auto power down
+    C(0x38);                                   // high power mode on
+
+    C(0x29);                                   // display on
+    C(0x20);                                   // display inversion off
+    W(0xBB, 0x4F);                             // enable clear RAM to 0
+
+    #undef W
+    #undef C
+
+    vTaskDelay(pdMS_TO_TICKS(50));
+    return ESP_OK;
+}
+
+esp_err_t ST7305_Init(void)
+{
+    if (s_ready) {
+        return ESP_OK;
+    }
+
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << PIN_DC) | (1ULL << PIN_RESET),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+    };
+    ESP_RETURN_ON_FALSE(gpio_config(&io) == ESP_OK, ESP_FAIL, TAG, "gpio_config failed");
+
+    // TE is an input from the panel. Not used for timing yet -- see DG_DrawFrame.
+    gpio_config_t te = {
+        .pin_bit_mask = (1ULL << PIN_TE),
+        .mode = GPIO_MODE_INPUT,
+    };
+    gpio_config(&te);
+
+    spi_bus_config_t bus = {
+        .mosi_io_num = PIN_SDA,
+        .miso_io_num = -1,          // write-only panel
+        .sclk_io_num = PIN_SCL,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        // A whole frame goes out in one transaction.
+        .max_transfer_sz = ST7305_FB_BYTES + 64,
+    };
+    esp_err_t e = spi_bus_initialize(ST7305_HOST, &bus, SPI_DMA_CH_AUTO);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "spi_bus_initialize: %s", esp_err_to_name(e));
+        return e;
+    }
+
+    spi_device_interface_config_t dev = {
+        .clock_speed_hz = ST7305_SPI_HZ,
+        .mode = 0,                  // CPOL=0 CPHA=0, per the panel
+        .spics_io_num = PIN_CS,
+        .queue_size = 2,
+    };
+    e = spi_bus_add_device(ST7305_HOST, &dev, &s_spi);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "spi_bus_add_device: %s", esp_err_to_name(e));
+        return e;
+    }
+
+    // Hardware reset. Widths from the u8g2 display descriptor (3ms each).
+    gpio_set_level(PIN_RESET, 1);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level(PIN_RESET, 0);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level(PIN_RESET, 1);
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    e = panel_init_sequence();
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "init sequence failed: %s", esp_err_to_name(e));
+        return e;
+    }
+
+    s_ready = true;
+    ESP_LOGI(TAG, "ST7305 up: %dx%d landscape, 1bpp, %d-byte frame, SPI %d MHz",
+             ST7305_W, ST7305_H, ST7305_FB_BYTES, ST7305_SPI_HZ / 1000000);
+    return ESP_OK;
+}
+
+esp_err_t ST7305_Flush(const uint8_t *packed)
+{
+    if (!s_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const uint8_t caset[] = { CASET_START, CASET_END };
+    const uint8_t raset[] = { RASET_START, RASET_END };
+
+    esp_err_t e = wr(CMD_CASET, caset, sizeof(caset));
+    if (e != ESP_OK) return e;
+    e = wr(CMD_RASET, raset, sizeof(raset));
+    if (e != ESP_OK) return e;
+
+    e = wr_cmd(CMD_RAMWR);
+    if (e != ESP_OK) return e;
+
+    return spi_tx(packed, ST7305_FB_BYTES, true);
+}
+
+void ST7305_ClearBuffer(uint8_t *packed)
+{
+    // 0 bits are background on this panel (inversion is off).
+    memset(packed, 0x00, ST7305_FB_BYTES);
+}

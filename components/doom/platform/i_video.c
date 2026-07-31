@@ -126,9 +126,9 @@ typedef struct
 	byte b;
 } col_t;
 
-// Palette converted to the panel's pixel format. Declared in doomgeneric.h;
-// the display driver reads it to expand indexed pixels at blit time.
-uint16_t DG_Palette[256];
+// Doom's palette reduced to luminance. Declared in doomgeneric.h; the blit
+// dithers these brightnesses down to the panel's single bit per pixel.
+uint8_t DG_Palette[256];
 
 void I_InitGraphics (void)
 {
@@ -249,61 +249,59 @@ void I_ReadScreen (byte* scr)
 //
 // I_SetPalette
 //
-#define GFX_RGB565(r, g, b)			((((r) >> 3) << 11) | (((g) >> 2) << 5) | ((b) >> 3))
-#define GFX_RGB565_R(color)			((0xF800 & color) >> 11)
-#define GFX_RGB565_G(color)			((0x07E0 & color) >> 5)
-#define GFX_RGB565_B(color)			(0x001F & color)
 
 void I_SetPalette (byte* palette)
 {
-	for (int i=0; i < 256 ; i++)
+	// The panel is monochrome, so colour is reduced to perceptual luminance
+	// using the usual Rec.601 weights: green dominates because the eye is most
+	// sensitive to it. A flat (R+G+B)/3 average would wash out Doom's greens
+	// and make foliage, armour and the HUD read far too dark.
+	//
+	// Fixed-point: the weights are scaled by 1024 so this stays integer-only.
+	for (int i = 0; i < 256; i++)
 	{
-		uint16_t color = GFX_RGB565(palette[0], palette[1], palette[2]);
-		DG_Palette[i] = (color >> 8) | (color << 8);
+		unsigned r = palette[0];
+		unsigned g = palette[1];
+		unsigned b = palette[2];
+
+		unsigned y = (306u * r + 601u * g + 117u * b) >> 10;   // ~0.299/0.587/0.114
+		DG_Palette[i] = (uint8_t)(y > 255u ? 255u : y);
+
 		palette += 3;
 	}
-
-//	for (int i = 0; i < 256; ++i )
-//	{
-//		colors[i].a = 0;
-//		colors[i].r = gammatable[usegamma][*palette++];
-//		colors[i].g = gammatable[usegamma][*palette++];
-//		colors[i].b = gammatable[usegamma][*palette++];
-//	}
 }
 
 // Given an RGB value, find the closest matching palette index.
+//
+// Previously this compared against RGB565 entries that were stored byte-swapped
+// and matched 8-bit inputs against 5-bit channels -- wrong twice over, though
+// only ever reachable under -testcontrols. Now that DG_Palette holds luminance,
+// the honest comparison is on luminance too.
 
 int I_GetPaletteIndex (int r, int g, int b)
 {
-    int best, best_diff, diff;
-    int i;
-    col_t color;
+    int best = 0;
+    int best_diff = INT_MAX;
 
-    printf("I_GetPaletteIndex\n");
+    unsigned target = (306u * (unsigned)r + 601u * (unsigned)g + 117u * (unsigned)b) >> 10;
+    if (target > 255u) {
+        target = 255u;
+    }
 
-    best = 0;
-    best_diff = INT_MAX;
-
-    for (i = 0; i < 256; ++i)
+    for (int i = 0; i < 256; ++i)
     {
-    	color.r = GFX_RGB565_R(DG_Palette[i]);
-    	color.g = GFX_RGB565_G(DG_Palette[i]);
-    	color.b = GFX_RGB565_B(DG_Palette[i]);
-
-        diff = (r - color.r) * (r - color.r)
-             + (g - color.g) * (g - color.g)
-             + (b - color.b) * (b - color.b);
+        int diff = (int)target - (int)DG_Palette[i];
+        diff *= diff;
 
         if (diff < best_diff)
         {
             best = i;
             best_diff = diff;
-        }
 
-        if (diff == 0)
-        {
-            break;
+            if (diff == 0)
+            {
+                break;
+            }
         }
     }
 
