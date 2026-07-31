@@ -83,10 +83,19 @@ static esp_err_t wr(uint8_t cmd, const uint8_t *args, size_t n)
 }
 
 //
-// Initialisation sequence, transcribed from Waveshare's demo source for this
-// board. The comments are theirs (translated), and the values are tuned by the
-// panel manufacturer -- these are not generic ST7305 defaults, and guessing
-// them would produce a blank or badly-contrasted screen.
+// Initialisation sequence for this panel.
+//
+// Originally transcribed wholesale from Waveshare's u8g2-based demo, which was
+// a mistake: u8g2 writes the panel tile by tile, setting RASET per sub-row and
+// expanding 3 bytes into 6 as it goes. We instead dump all 15000 bytes flat
+// after a single window set, the way ngttai/esp_lcd_st7305 does. Mixing one
+// driver's init with another's write strategy produced coherent-but-wrong
+// output on the glass.
+//
+// Where the two disagree, the values below now follow the esp_lcd driver, since
+// that is whose write path we use. The orientation-critical registers (0x36,
+// 0x3A, 0xB0, 0xB8, 0xB9) are identical in both, which is why geometry looked
+// approximately right while tone did not.
 //
 static esp_err_t panel_init_sequence(void)
 {
@@ -106,7 +115,7 @@ static esp_err_t panel_init_sequence(void)
 
     W(0xD6, 0x13, 0x02);                       // NVM load control
     W(0xD1, 0x01);                             // booster enable
-    W(0xC0, 0x12, 0x0A);                       // gate voltage: VGH 15V, VGL -10V
+    W(0xC0, 0x11, 0x04);                       // gate voltage (reference driver's values)
     W(0xC1, 0x3C, 0x3E, 0x3C, 0x3C);           // VSHP 1..4 = 4.8V
     W(0xC2, 0x23, 0x21, 0x23, 0x23);           // VSLP 1..4 = 0.98V
     W(0xC4, 0x5A, 0x5C, 0x5A, 0x5A);           // VSHN 1..4 = -3.6V
@@ -137,8 +146,8 @@ static esp_err_t panel_init_sequence(void)
     W(0xD0, 0xFF);                             // enable auto power down
     C(0x38);                                   // high power mode on
 
+    C(0x21);                                   // display inversion ON
     C(0x29);                                   // display on
-    C(0x20);                                   // display inversion off
     W(0xBB, 0x4F);                             // enable clear RAM to 0
 
     #undef W
