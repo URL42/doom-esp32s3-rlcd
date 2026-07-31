@@ -194,6 +194,14 @@ void I_InitGraphics (void)
     /* Allocate screen to draw to */
 	I_VideoBuffer = (byte*)Z_Malloc (SCREENWIDTH * SCREENHEIGHT, PU_STATIC, NULL);  // For DOOM to draw on
 
+	// Clear it. Zone memory arrives full of whatever was there before, and at
+	// 400x300 that matters: the WAD's title, menu and intermission graphics are
+	// 320x200 patches drawn at the top-left whatever the screen size is, so the
+	// 80px right edge and 100px bottom are never written by the game. Dithering
+	// uninitialised bytes turns them into dense random noise -- far more visually
+	// aggressive than the picture itself. Index 0 is black in Doom's palette.
+	memset(I_VideoBuffer, 0, SCREENWIDTH * SCREENHEIGHT);
+
 	screenvisible = true;
 
     extern void I_InitInput(void);
