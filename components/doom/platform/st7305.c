@@ -44,6 +44,10 @@ static const char *TAG = "st7305";
 static spi_device_handle_t s_spi;
 static bool s_ready;
 
+// CS is active low and must stay asserted for an entire command+data sequence.
+static inline void cs_select(void)   { gpio_set_level(PIN_CS, 0); }
+static inline void cs_release(void)  { gpio_set_level(PIN_CS, 1); }
+
 static esp_err_t spi_tx(const uint8_t *data, size_t len, bool is_data)
 {
     if (len == 0) {
@@ -88,12 +92,14 @@ static esp_err_t panel_init_sequence(void)
 {
     esp_err_t e;
 
-    #define W(cmd, ...) do { \
+    cs_select();
+
+    #define W(cmd, ...)  do { \
         const uint8_t _a[] = { __VA_ARGS__ }; \
         e = wr((cmd), _a, sizeof(_a)); \
-        if (e != ESP_OK) return e; \
+        if (e != ESP_OK) { cs_release(); return e; } \
     } while (0)
-    #define C(cmd) do { e = wr_cmd(cmd); if (e != ESP_OK) return e; } while (0)
+    #define C(cmd) do { e = wr_cmd(cmd); if (e != ESP_OK) { cs_release(); return e; } } while (0)
 
     C(0x01);                                   // software reset
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -138,6 +144,8 @@ static esp_err_t panel_init_sequence(void)
     #undef W
     #undef C
 
+    cs_release();
+
     vTaskDelay(pdMS_TO_TICKS(50));
     return ESP_OK;
 }
@@ -149,7 +157,7 @@ esp_err_t ST7305_Init(void)
     }
 
     gpio_config_t io = {
-        .pin_bit_mask = (1ULL << PIN_DC) | (1ULL << PIN_RESET),
+        .pin_bit_mask = (1ULL << PIN_DC) | (1ULL << PIN_RESET) | (1ULL << PIN_CS),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_ENABLE,
     };
@@ -180,7 +188,15 @@ esp_err_t ST7305_Init(void)
     spi_device_interface_config_t dev = {
         .clock_speed_hz = ST7305_SPI_HZ,
         .mode = 0,                  // CPOL=0 CPHA=0, per the panel
-        .spics_io_num = PIN_CS,
+        // CS is driven by hand, NOT by the peripheral.
+        //
+        // With hardware CS the driver deasserts it around every individual
+        // spi_device_transmit -- including between a command byte and its
+        // arguments. The ST7305 requires CS to stay low for a whole
+        // command+data sequence and discards anything fragmented that way, so
+        // every SPI call returns ESP_OK and the panel stays blank. Waveshare's
+        // own driver sets spics_io_num = -1 for exactly this reason.
+        .spics_io_num = -1,
         .queue_size = 2,
     };
     e = spi_bus_add_device(ST7305_HOST, &dev, &s_spi);
@@ -188,6 +204,8 @@ esp_err_t ST7305_Init(void)
         ESP_LOGE(TAG, "spi_bus_add_device: %s", esp_err_to_name(e));
         return e;
     }
+
+    cs_release();   // idle high before the first transfer
 
     // Hardware reset. Widths from the u8g2 display descriptor (3ms each).
     gpio_set_level(PIN_RESET, 1);
@@ -218,19 +236,67 @@ esp_err_t ST7305_Flush(const uint8_t *packed)
     const uint8_t caset[] = { CASET_START, CASET_END };
     const uint8_t raset[] = { RASET_START, RASET_END };
 
+    cs_select();
+
     esp_err_t e = wr(CMD_CASET, caset, sizeof(caset));
-    if (e != ESP_OK) return e;
-    e = wr(CMD_RASET, raset, sizeof(raset));
-    if (e != ESP_OK) return e;
+    if (e == ESP_OK) e = wr(CMD_RASET, raset, sizeof(raset));
+    if (e == ESP_OK) e = wr_cmd(CMD_RAMWR);
+    if (e == ESP_OK) e = spi_tx(packed, ST7305_FB_BYTES, true);
 
-    e = wr_cmd(CMD_RAMWR);
-    if (e != ESP_OK) return e;
-
-    return spi_tx(packed, ST7305_FB_BYTES, true);
+    cs_release();
+    return e;
 }
 
 void ST7305_ClearBuffer(uint8_t *packed)
 {
     // 0 bits are background on this panel (inversion is off).
     memset(packed, 0x00, ST7305_FB_BYTES);
+}
+
+void ST7305_TestPattern(uint8_t *packed, int hold_ms)
+{
+    ST7305_ClearBuffer(packed);
+
+    // 1px border around the full panel -- proves the extents and the addressing.
+    for (int x = 0; x < ST7305_W; x++) {
+        ST7305_SetPixel(packed, x, 0, true);
+        ST7305_SetPixel(packed, x, ST7305_H - 1, true);
+    }
+    for (int y = 0; y < ST7305_H; y++) {
+        ST7305_SetPixel(packed, 0, y, true);
+        ST7305_SetPixel(packed, ST7305_W - 1, y, true);
+    }
+
+    // Solid block in the TOP-LEFT only. Asymmetric on both axes, so a flip or a
+    // mirror is obvious rather than ambiguous.
+    for (int y = 10; y < 60; y++) {
+        for (int x = 10; x < 110; x++) {
+            ST7305_SetPixel(packed, x, y, true);
+        }
+    }
+
+    // Diagonal from top-left to bottom-right: shows shear if the row stride or
+    // the 2x4 block packing is wrong.
+    for (int i = 0; i < ST7305_H; i++) {
+        ST7305_SetPixel(packed, (i * ST7305_W) / ST7305_H, i, true);
+    }
+
+    // Vertical grey ramp via 4x4 ordered dither, right half. If the panel is
+    // alive but the packing is off, this degenerates into visible banding.
+    static const uint8_t bayer[16] = {
+          8, 136,  40, 168,
+        200,  72, 232, 104,
+         56, 184,  24, 152,
+        248, 120, 216,  88,
+    };
+    for (int y = 80; y < ST7305_H - 20; y++) {
+        int level = (255 * (y - 80)) / (ST7305_H - 100);
+        for (int x = 220; x < ST7305_W - 20; x++) {
+            ST7305_SetPixel(packed, x, y, level < bayer[((y & 3) << 2) | (x & 3)]);
+        }
+    }
+
+    ESP_LOGW(TAG, "TEST PATTERN: border + solid block TOP-LEFT + diagonal + grey ramp right");
+    ST7305_Flush(packed);
+    vTaskDelay(pdMS_TO_TICKS(hold_ms));
 }

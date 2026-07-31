@@ -42,6 +42,14 @@ esp_err_t ST7305_Flush(const uint8_t *packed);
 // Set every pixel of a packed buffer to white (the panel's rest state).
 void ST7305_ClearBuffer(uint8_t *packed);
 
+// Draw an unmistakable test pattern and hold it briefly.
+//
+// Bring-up aid, and worth keeping: with no other output device, this is the only
+// way to tell "the driver works" from "the driver works and the game blit is
+// wrong". The pattern is deliberately asymmetric so orientation and mirroring
+// are readable at a glance.
+void ST7305_TestPattern(uint8_t *packed, int hold_ms);
+
 // Set one pixel in a packed buffer. `black` selects ink rather than background.
 // Coordinates are landscape 0..399 x 0..299. Bounds-checked.
 static inline void ST7305_SetPixel(uint8_t *packed, int x, int y, bool black)

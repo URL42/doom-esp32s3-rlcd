@@ -449,6 +449,7 @@ void DG_Init(void)
         } else {
             // Clear once: the 40px side and 50px top/bottom borders around
             // Doom's 320x200 frame never change, so they cost nothing per frame.
+            ST7305_TestPattern(s_panel_fb, 4000);
             ST7305_ClearBuffer(s_panel_fb);
             ST7305_Flush(s_panel_fb);
             ESP_LOGI(TAG, "panel ready: %dx%d frame at (%d,%d) on a %dx%d panel",
