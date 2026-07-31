@@ -242,15 +242,35 @@ esp_err_t ST7305_Flush(const uint8_t *packed)
         return ESP_ERR_INVALID_STATE;
     }
 
-    const uint8_t caset[] = { CASET_START, CASET_END };
-    const uint8_t raset[] = { RASET_START, RASET_END };
+    // Row-addressed, not a flat dump.
+    //
+    // Dumping all 15000 bytes after a single CASET/RASET assumes the controller
+    // auto-increments from the end of one row into the start of the next. It
+    // does not, and the result on glass is regular vertical striping -- the
+    // image is coherent but smeared across the wrong addresses.
+    //
+    // u8g2's driver for this exact 300x400 panel re-addresses every row, and
+    // that is what this now does: CASET, then RASET with start == end, then
+    // RAMWR, for each of the 200 addressable rows.
+    //
+    // Note CASET starts at 0x01, not 0x00. That is u8g2's value for this panel;
+    // starting at zero shifts every row by one column unit.
+    //
+    // CS stays asserted across the whole frame, as it must.
+    static const uint8_t caset[] = { 0x01, 0x2A };
 
     cs_select();
 
-    esp_err_t e = wr(CMD_CASET, caset, sizeof(caset));
-    if (e == ESP_OK) e = wr(CMD_RASET, raset, sizeof(raset));
-    if (e == ESP_OK) e = wr_cmd(CMD_RAMWR);
-    if (e == ESP_OK) e = spi_tx(packed, ST7305_FB_BYTES, true);
+    esp_err_t e = ESP_OK;
+    for (int row = 0; row < ST7305_ROWS && e == ESP_OK; row++) {
+        const uint8_t raset[] = { (uint8_t)row, (uint8_t)row };
+
+        e = wr(CMD_CASET, caset, sizeof(caset));
+        if (e == ESP_OK) e = wr(CMD_RASET, raset, sizeof(raset));
+        if (e == ESP_OK) e = wr_cmd(CMD_RAMWR);
+        if (e == ESP_OK) e = spi_tx(packed + (size_t)row * ST7305_ROW_BYTES,
+                                    ST7305_ROW_BYTES, true);
+    }
 
     cs_release();
     return e;

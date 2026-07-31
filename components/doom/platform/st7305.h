@@ -32,6 +32,13 @@
 #define ST7305_BLOCKS_Y   (ST7305_H / 4)                 // 75
 #define ST7305_FB_BYTES   ((ST7305_W / 2) * ST7305_BLOCKS_Y)  // 15000
 
+// The same buffer viewed the way the controller addresses it: in the panel's
+// native portrait orientation it is row-major, 200 addressable rows of 75 bytes.
+// index = (y_portrait / 2) * 75 + (x_portrait / 4), which is exactly what the
+// landscape formula above collapses to after rotation.
+#define ST7305_ROW_BYTES  ST7305_BLOCKS_Y                // 75
+#define ST7305_ROWS       (ST7305_W / 2)                 // 200
+
 // Bring up SPI and initialise the panel. Safe to call once.
 esp_err_t ST7305_Init(void);
 
