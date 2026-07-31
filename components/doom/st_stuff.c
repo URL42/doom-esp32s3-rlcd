@@ -74,7 +74,7 @@
 
 // N/256*100% probability
 //  that the normal face state will change
-#define ST_FACEPROBABILITY		96
+#define ST_FACEPROBABILITY			(96 + ST_YSHIFT)
 
 // For Responder
 #define ST_TOGGLECHAT		KEY_ENTER
@@ -83,10 +83,18 @@
 // Centre the 320px status bar on a wider screen rather than pinning it left,
 // which would leave the whole right-hand side empty.
 #define ST_X				((SCREENWIDTH - ST_WIDTH) / 2)
+
+// Every widget coordinate below is an absolute screen position baked for the
+// original 320x200 screen, where the bar started at y=168. On a larger screen
+// the bar moves, so they must move with it -- otherwise drawNum's
+// "n->y - ST_Y < 0" check trips and I_Error kills the game outright, which is
+// how this first showed up at 400x300.
+#define ST_XSHIFT			((SCREENWIDTH  - 320) / 2)
+#define ST_YSHIFT			(SCREENHEIGHT - 200)
 #define ST_X2				104
 
-#define ST_FX  			143
-#define ST_FY  			169
+#define ST_FX			(143 + ST_XSHIFT)
+#define ST_FY			(169 + ST_YSHIFT)
 
 // Should be set to patch width
 //  for tall numbers later on
@@ -113,8 +121,8 @@
 #define ST_GODFACE			(ST_NUMPAINFACES*ST_FACESTRIDE)
 #define ST_DEADFACE			(ST_GODFACE+1)
 
-#define ST_FACESX			143
-#define ST_FACESY			168
+#define ST_FACESX			(143 + ST_XSHIFT)
+#define ST_FACESY			(168 + ST_YSHIFT)
 
 #define ST_EVILGRINCOUNT		(2*TICRATE)
 #define ST_STRAIGHTFACECOUNT	(TICRATE/2)
@@ -135,120 +143,120 @@
 
 // AMMO number pos.
 #define ST_AMMOWIDTH		3	
-#define ST_AMMOX			44
-#define ST_AMMOY			171
+#define ST_AMMOX			(44 + ST_XSHIFT)
+#define ST_AMMOY			(171 + ST_YSHIFT)
 
 // HEALTH number pos.
 #define ST_HEALTHWIDTH		3	
-#define ST_HEALTHX			90
-#define ST_HEALTHY			171
+#define ST_HEALTHX			(90 + ST_XSHIFT)
+#define ST_HEALTHY			(171 + ST_YSHIFT)
 
 // Weapon pos.
-#define ST_ARMSX			111
-#define ST_ARMSY			172
-#define ST_ARMSBGX			104
-#define ST_ARMSBGY			168
+#define ST_ARMSX			(111 + ST_XSHIFT)
+#define ST_ARMSY			(172 + ST_YSHIFT)
+#define ST_ARMSBGX			(104 + ST_XSHIFT)
+#define ST_ARMSBGY			(168 + ST_YSHIFT)
 #define ST_ARMSXSPACE		12
 #define ST_ARMSYSPACE		10
 
 // Frags pos.
-#define ST_FRAGSX			138
-#define ST_FRAGSY			171	
+#define ST_FRAGSX			(138 + ST_XSHIFT)
+#define ST_FRAGSY			(171 + ST_YSHIFT)	
 #define ST_FRAGSWIDTH		2
 
 // ARMOR number pos.
 #define ST_ARMORWIDTH		3
-#define ST_ARMORX			221
-#define ST_ARMORY			171
+#define ST_ARMORX			(221 + ST_XSHIFT)
+#define ST_ARMORY			(171 + ST_YSHIFT)
 
 // Key icon positions.
 #define ST_KEY0WIDTH		8
 #define ST_KEY0HEIGHT		5
-#define ST_KEY0X			239
-#define ST_KEY0Y			171
+#define ST_KEY0X			(239 + ST_XSHIFT)
+#define ST_KEY0Y			(171 + ST_YSHIFT)
 #define ST_KEY1WIDTH		ST_KEY0WIDTH
-#define ST_KEY1X			239
-#define ST_KEY1Y			181
+#define ST_KEY1X			(239 + ST_XSHIFT)
+#define ST_KEY1Y			(181 + ST_YSHIFT)
 #define ST_KEY2WIDTH		ST_KEY0WIDTH
-#define ST_KEY2X			239
-#define ST_KEY2Y			191
+#define ST_KEY2X			(239 + ST_XSHIFT)
+#define ST_KEY2Y			(191 + ST_YSHIFT)
 
 // Ammunition counter.
 #define ST_AMMO0WIDTH		3
 #define ST_AMMO0HEIGHT		6
-#define ST_AMMO0X			288
-#define ST_AMMO0Y			173
+#define ST_AMMO0X			(288 + ST_XSHIFT)
+#define ST_AMMO0Y			(173 + ST_YSHIFT)
 #define ST_AMMO1WIDTH		ST_AMMO0WIDTH
-#define ST_AMMO1X			288
-#define ST_AMMO1Y			179
+#define ST_AMMO1X			(288 + ST_XSHIFT)
+#define ST_AMMO1Y			(179 + ST_YSHIFT)
 #define ST_AMMO2WIDTH		ST_AMMO0WIDTH
-#define ST_AMMO2X			288
-#define ST_AMMO2Y			191
+#define ST_AMMO2X			(288 + ST_XSHIFT)
+#define ST_AMMO2Y			(191 + ST_YSHIFT)
 #define ST_AMMO3WIDTH		ST_AMMO0WIDTH
-#define ST_AMMO3X			288
-#define ST_AMMO3Y			185
+#define ST_AMMO3X			(288 + ST_XSHIFT)
+#define ST_AMMO3Y			(185 + ST_YSHIFT)
 
 // Indicate maximum ammunition.
 // Only needed because backpack exists.
 #define ST_MAXAMMO0WIDTH		3
 #define ST_MAXAMMO0HEIGHT		5
-#define ST_MAXAMMO0X		314
-#define ST_MAXAMMO0Y		173
+#define ST_MAXAMMO0X			(314 + ST_XSHIFT)
+#define ST_MAXAMMO0Y			(173 + ST_YSHIFT)
 #define ST_MAXAMMO1WIDTH		ST_MAXAMMO0WIDTH
-#define ST_MAXAMMO1X		314
-#define ST_MAXAMMO1Y		179
+#define ST_MAXAMMO1X			(314 + ST_XSHIFT)
+#define ST_MAXAMMO1Y			(179 + ST_YSHIFT)
 #define ST_MAXAMMO2WIDTH		ST_MAXAMMO0WIDTH
-#define ST_MAXAMMO2X		314
-#define ST_MAXAMMO2Y		191
+#define ST_MAXAMMO2X			(314 + ST_XSHIFT)
+#define ST_MAXAMMO2Y			(191 + ST_YSHIFT)
 #define ST_MAXAMMO3WIDTH		ST_MAXAMMO0WIDTH
-#define ST_MAXAMMO3X		314
-#define ST_MAXAMMO3Y		185
+#define ST_MAXAMMO3X			(314 + ST_XSHIFT)
+#define ST_MAXAMMO3Y			(185 + ST_YSHIFT)
 
 // pistol
-#define ST_WEAPON0X			110 
-#define ST_WEAPON0Y			172
+#define ST_WEAPON0X			(110 + ST_XSHIFT) 
+#define ST_WEAPON0Y			(172 + ST_YSHIFT)
 
 // shotgun
-#define ST_WEAPON1X			122 
-#define ST_WEAPON1Y			172
+#define ST_WEAPON1X			(122 + ST_XSHIFT) 
+#define ST_WEAPON1Y			(172 + ST_YSHIFT)
 
 // chain gun
-#define ST_WEAPON2X			134 
-#define ST_WEAPON2Y			172
+#define ST_WEAPON2X			(134 + ST_XSHIFT) 
+#define ST_WEAPON2Y			(172 + ST_YSHIFT)
 
 // missile launcher
-#define ST_WEAPON3X			110 
-#define ST_WEAPON3Y			181
+#define ST_WEAPON3X			(110 + ST_XSHIFT) 
+#define ST_WEAPON3Y			(181 + ST_YSHIFT)
 
 // plasma gun
-#define ST_WEAPON4X			122 
-#define ST_WEAPON4Y			181
+#define ST_WEAPON4X			(122 + ST_XSHIFT) 
+#define ST_WEAPON4Y			(181 + ST_YSHIFT)
 
  // bfg
-#define ST_WEAPON5X			134
-#define ST_WEAPON5Y			181
+#define ST_WEAPON5X			(134 + ST_XSHIFT)
+#define ST_WEAPON5Y			(181 + ST_YSHIFT)
 
 // WPNS title
-#define ST_WPNSX			109 
-#define ST_WPNSY			191
+#define ST_WPNSX			(109 + ST_XSHIFT) 
+#define ST_WPNSY			(191 + ST_YSHIFT)
 
  // DETH title
-#define ST_DETHX			109
-#define ST_DETHY			191
+#define ST_DETHX			(109 + ST_XSHIFT)
+#define ST_DETHY			(191 + ST_YSHIFT)
 
 //Incoming messages window location
 //UNUSED
 // #define ST_MSGTEXTX	   (viewwindowx)
 // #define ST_MSGTEXTY	   (viewwindowy+viewheight-18)
-#define ST_MSGTEXTX			0
-#define ST_MSGTEXTY			0
+#define ST_MSGTEXTX			(0 + ST_XSHIFT)
+#define ST_MSGTEXTY			(0 + ST_YSHIFT)
 // Dimensions given in characters.
 #define ST_MSGWIDTH			52
 // Or shall I say, in lines?
 #define ST_MSGHEIGHT		1
 
-#define ST_OUTTEXTX			0
-#define ST_OUTTEXTY			6
+#define ST_OUTTEXTX			(0 + ST_XSHIFT)
+#define ST_OUTTEXTY			(6 + ST_YSHIFT)
 
 // Width, in characters again.
 #define ST_OUTWIDTH			52 
@@ -258,7 +266,7 @@
 #define ST_MAPTITLEX \
     (SCREENWIDTH - ST_MAPWIDTH * ST_CHATFONTWIDTH)
 
-#define ST_MAPTITLEY		0
+#define ST_MAPTITLEY			(0 + ST_YSHIFT)
 #define ST_MAPHEIGHT		1
 
 // graphics are drawn to a backing screen and blitted to the real screen
