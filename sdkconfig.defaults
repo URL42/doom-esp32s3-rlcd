@@ -1,0 +1,77 @@
+#
+# Board: Waveshare ESP32-S3-RLCD-4.2 (ESP32-S3-WROOM-1-N16R8)
+# 16MB flash, 8MB octal PSRAM.
+#
+# This file is the checked-in source of truth. sdkconfig itself is generated and
+# gitignored -- edit here, then `idf.py reconfigure`.
+#
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# --- Flash -------------------------------------------------------------------
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# --- Partition table ---------------------------------------------------------
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- PSRAM -------------------------------------------------------------------
+# The N16R8 module uses octal (8-line) PSRAM. Selecting quad mode here does not
+# fail loudly -- it fails as PSRAM simply not being detected at boot.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_TYPE_AUTO=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# Route large allocations to PSRAM automatically. Doom's zone allocator takes one
+# multi-megabyte malloc at startup, which internal RAM cannot satisfy; with this
+# set it lands in PSRAM without the game needing to know PSRAM exists.
+CONFIG_SPIRAM_USE_MALLOC=y
+
+# Allocations at or above this size prefer PSRAM. Small, hot allocations stay in
+# internal RAM where they are faster and not subject to cache pressure.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+
+# Keep a reserved pool of internal RAM that PSRAM-backed malloc will not eat,
+# so DMA-capable allocations (the SPI panel flush, later) can still be served.
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+
+# --- CPU ---------------------------------------------------------------------
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_FREERTOS_HZ=1000
+
+# --- Compiler ----------------------------------------------------------------
+# Optimise for speed. The renderer is the hot path and we have flash to spare.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# --- Console -----------------------------------------------------------------
+# Phase 0 input arrives over stdin, so which peripheral backs the console decides
+# whether input works at all.
+#
+# The Type-C port wires straight to GPIO19/20 with no bridge chip, so it is the
+# S3's native USB -- not a UART. UART0 (TX43/RX44) exists only on the expansion
+# header and would need a separate USB-serial adapter. Selecting the UART console
+# would therefore give a working flash and log path but *no* stdin over the cable
+# you are already holding, and DG_GetKey would never see a byte.
+#
+# USB-Serial-JTAG puts both directions on the Type-C port. Note the secondary
+# console is output-only, so this must be the primary, not the secondary.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# --- Cache -------------------------------------------------------------------
+# Defaults are 16KB icache / 32KB dcache. Doom executes from flash XIP with a
+# working set well past 16KB, and the zone heap, framebuffer and every mmap'd
+# lump sit behind the data cache. Since a stated goal of Phase 0 is measuring
+# render-only frame time, measuring it on default cache sizing would understate
+# what the CPU can actually do and wrongly implicate the panel.
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+
+# --- Watchdog ----------------------------------------------------------------
+# The game loop runs at high priority pinned to core 0 and does not yield on a
+# fixed schedule. Leaving the idle-task watchdog on core 0 enabled would trip it
+# during level load.
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=n

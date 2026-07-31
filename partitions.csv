@@ -1,0 +1,40 @@
+# Partition table for DOOM on ESP32-S3-RLCD-4.2 (16MB flash)
+#
+# Offsets are explicit rather than blank-and-auto so that the WAD partition's
+# address is stable: it is baked into the flashing command, and shifting it
+# silently would flash the WAD into the wrong place.
+#
+# Alignment rules that constrain this layout:
+#   - app partitions must start on a 64KB (0x10000) boundary
+#   - data partitions must start on a 4KB (0x1000) boundary
+#   - the table itself lives at 0x8000 and occupies 0x1000
+#
+# The WAD partition is additionally 64KB-aligned on purpose: the ESP32-S3 MMU
+# maps flash in 64KB pages, so an aligned partition maps without a partial
+# leading page.
+#
+# Type 0x42 / subtype 0x06 is the WAD. ESP-IDF reserves partition types
+# 0x00-0x3F for itself and leaves 0x40-0xFE to the application.
+#
+# WAD partition sizing -- 5M, not the 4M originally planned:
+#
+#   shareware DOOM1.WAD = 4,196,020 bytes
+#   4 MiB partition     = 4,194,304 bytes
+#
+# The stock shareware WAD overflows a 4MiB partition by 1,716 bytes. ESP_DOOM
+# worked around this by shipping a cut-down 3.1MB WAD; we would rather hold the
+# unmodified file. 5M is the next size up that keeps the following partition
+# 64KB-aligned.
+#
+# Note this only covers shareware. Ultimate Doom (~12MB) and Doom II (~14MB) do
+# not fit in 16MB flash alongside a 3MB app -- those need the SD card.
+#
+# Flash the WAD with:
+#   esptool.py -p <port> write_flash 0x310000 doom1.wad
+#
+# Name,     Type, SubType,  Offset,    Size,     Flags
+nvs,        data, nvs,      0x9000,    0x6000,
+phy_init,   data, phy,      0xf000,    0x1000,
+factory,    app,  factory,  0x10000,   3M,
+wad,        0x42, 0x06,     0x310000,  5M,
+storage,    data, fat,      0x810000,  7M,

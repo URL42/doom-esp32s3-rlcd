@@ -1,0 +1,11 @@
+# ESP-IDF build output
+/build/
+
+# Generated config. sdkconfig.defaults is the checked-in source of truth.
+/sdkconfig
+/sdkconfig.old
+
+# WAD payload -- not redistributable, flashed separately to the `wad` partition
+*.wad
+
+.DS_Store

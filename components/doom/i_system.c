@@ -36,6 +36,8 @@
 
 #include "config.h"
 
+#include "esp_memory_utils.h"   // esp_ptr_external_ram, for the zone placement report
+
 #include "deh_str.h"
 #include "doomtype.h"
 #include "m_argv.h"
@@ -157,8 +159,18 @@ byte *I_ZoneBase (int *size)
 
     zonemem = AutoAllocMemory(size, default_ram, min_ram);
 
-    printf("zone memory: %p, %x allocated for zone\n", 
+    printf("zone memory: %p, %x allocated for zone\n",
            zonemem, *size);
+
+    // The zone landing in PSRAM is not enforced by anything in this file -- it
+    // is a consequence of CONFIG_SPIRAM_USE_MALLOC plus the ALWAYSINTERNAL
+    // threshold being far below the zone size. Report it rather than assume it,
+    // so a config change that quietly moves the zone into internal RAM (or
+    // fails to) is visible in the boot log instead of showing up as an
+    // out-of-memory much later.
+    printf("zone memory: %s\n",
+           esp_ptr_external_ram(zonemem) ? "in PSRAM (expected)"
+                                         : "in INTERNAL RAM -- check CONFIG_SPIRAM_*");
 
     return zonemem;
 }

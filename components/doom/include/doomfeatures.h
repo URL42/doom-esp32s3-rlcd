@@ -31,9 +31,15 @@
 
 #undef FEATURE_MULTIPLAYER
 
-// Enables sound output
+// Enables sound output.
+//
+// Upstream doomgeneric leaves this to the build system and ships it undefined,
+// which silently disables I_InitSound and every sound_module_t hook. We want the
+// game-side sound logic live (S_StartSound channel allocation, distance
+// attenuation), so define it here and supply DG_sound_module / DG_music_module
+// from the platform layer.
 
-//#undef FEATURE_SOUND
+#define FEATURE_SOUND
 
 #endif /* #ifndef DOOM_FEATURES_H */
 

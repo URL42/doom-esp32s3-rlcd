@@ -18,9 +18,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#if defined(FEATURE_SOUND) && !defined(__DJGPP__)
-#include <SDL_mixer.h>
-#endif
+// Upstream guards an <SDL_mixer.h> include on FEATURE_SOUND here. Nothing in this
+// translation unit actually references a Mix_* symbol -- the remaining SDL
+// mentions are comments -- so the include is dropped rather than satisfied.
 
 #include "config.h"
 #include "doomfeatures.h"
