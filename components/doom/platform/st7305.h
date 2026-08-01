@@ -75,6 +75,15 @@ void ST7305_TestPattern(uint8_t *packed, int hold_ms);
 // passed in as scratch, so the caller must redraw afterwards.
 void ST7305_Deghost(uint8_t *scratch);
 
+// Gate equalisation profile. 0 = long (more contrast, more motion smear),
+// 1 = short (faster pixel settling, less contrast). Both value sets are
+// Waveshare's for this panel; the short one is the variant their demo leaves
+// commented out. Motion smear is liquid-crystal settling time, not bandwidth --
+// raising the frame rate makes it worse, because pixels get less time to finish
+// transitioning before being told to change again.
+extern int ST7305_EQProfile;
+esp_err_t ST7305_SetEQProfile(int fast);
+
 // Set one pixel in a packed buffer. `black` selects ink rather than background.
 // Coordinates are landscape 0..399 x 0..299. Bounds-checked.
 // Pixel mapping variant. Two are dimensionally valid for a 15000-byte buffer:

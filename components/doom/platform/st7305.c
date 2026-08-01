@@ -147,7 +147,9 @@ static esp_err_t panel_init_sequence(void)
     W(0xD8, 0xA6, 0xE9);                       // OSC setting
     W(0xB2, 0x12);                             // frame rate: HPM 32Hz, LPM 1Hz
 
-    // Update period gate EQ control, high-power mode
+    // Update period gate EQ control, high-power mode. See ST7305_SetEQProfile:
+    // this governs how long the panel spends equalising each update, which is
+    // what determines pixel settling time and therefore motion smear.
     W(0xB3, 0xE5, 0xF6, 0x17, 0x77, 0x77, 0x77, 0x77, 0x77, 0x77, 0x71);
     // ...and low-power mode
     W(0xB4, 0x05, 0x46, 0x77, 0x77, 0x77, 0x77, 0x77, 0x76, 0x45);
@@ -388,4 +390,40 @@ void ST7305_Deghost(uint8_t *scratch)
     memset(scratch, 0x00, ST7305_FB_BYTES);
     ST7305_Flush(scratch);
     vTaskDelay(pdMS_TO_TICKS(120));
+}
+
+int ST7305_EQProfile = 0;   // 0 = long EQ (contrast), 1 = short EQ (speed)
+
+esp_err_t ST7305_SetEQProfile(int fast)
+{
+    if (!s_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // Update Period Gate EQ Control, high-power mode.
+    //
+    // This sets how long the panel spends equalising gate lines on each update.
+    // Longer equalisation settles the liquid crystal more completely, which is
+    // what gives contrast; shorter equalisation finishes sooner, which is what
+    // reduces motion smear. It is a direct trade, and which end is right depends
+    // on whether you are looking at a static screen or a moving one.
+    //
+    // Both value sets are Waveshare's, for this exact panel -- the short profile
+    // is the variant they left commented out in their demo with the note that it
+    // has lower contrast. Neither is invented.
+    static const uint8_t eq_long[]  = { 0xE5, 0xF6, 0x17, 0x77,
+                                        0x77, 0x77, 0x77, 0x77, 0x77, 0x71 };
+    static const uint8_t eq_short[] = { 0xE5, 0xF6, 0x05, 0x46,
+                                        0x77, 0x77, 0x77, 0x77, 0x76, 0x45 };
+
+    ST7305_EQProfile = fast ? 1 : 0;
+
+    cs_select();
+    esp_err_t e = wr(0xB3, fast ? eq_short : eq_long,
+                     fast ? sizeof(eq_short) : sizeof(eq_long));
+    cs_release();
+
+    ESP_LOGW(TAG, "gate EQ -> %s", fast ? "SHORT (faster settling, less contrast)"
+                                        : "LONG (more contrast, more smear)");
+    return e;
 }

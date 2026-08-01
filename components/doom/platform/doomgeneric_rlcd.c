@@ -63,6 +63,13 @@ static uint32_t frames_window_start_ms;
 static uint64_t acc_dither_us;
 static uint64_t acc_flush_us;
 
+// Optional floor on frame time. Counter-intuitively this can REDUCE motion
+// smear: the panel's liquid crystal needs time to finish a transition, and
+// updating before it has settled leaves partial transitions that read as
+// dragging. Holding a frame longer lets pixels reach their target. 0 = off.
+static uint32_t s_frame_min_ms;
+static uint32_t s_last_frame_ms;
+
 // ---------------------------------------------------------------------------
 // Indexed -> 1bpp conversion
 // ---------------------------------------------------------------------------
@@ -198,6 +205,15 @@ void DG_DrawFrame(void)
         ST7305_Flush(s_panel_fb);
 
         acc_flush_us += (uint64_t)(esp_timer_get_time() - t_flush0);
+    }
+
+    if (s_frame_min_ms) {
+        uint32_t now = DG_GetTicksMs();
+        uint32_t since = now - s_last_frame_ms;
+        if (since < s_frame_min_ms) {
+            vTaskDelay(pdMS_TO_TICKS(s_frame_min_ms - since));
+        }
+        s_last_frame_ms = DG_GetTicksMs();
     }
 
     frame_count++;
@@ -508,6 +524,21 @@ static void PumpConsole(void)
             float g = DG_GetGamma() + (c == ']' ? 0.2f : -0.2f);
             DG_SetGamma(g);
             ESP_LOGW(TAG, "gamma -> %.2f  (]=darker, [=lighter)", (double)DG_GetGamma());
+            continue;
+        }
+        if (c == 'e' || c == 'E') {
+            ST7305_SetEQProfile(!ST7305_EQProfile);
+            continue;
+        }
+        if (c == 'r' || c == 'R') {
+            s_frame_min_ms = (s_frame_min_ms == 0) ? 45 : (s_frame_min_ms == 45 ? 60 : 0);
+            ESP_LOGW(TAG, "frame pacing -> %s",
+                     s_frame_min_ms ? "capped" : "uncapped");
+            if (s_frame_min_ms) {
+                ESP_LOGW(TAG, "  minimum %lu ms per frame (~%lu fps)",
+                         (unsigned long)s_frame_min_ms,
+                         (unsigned long)(1000u / s_frame_min_ms));
+            }
             continue;
         }
         if (c == 't' || c == 'T') {
