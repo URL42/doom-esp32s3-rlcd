@@ -126,30 +126,64 @@ void DG_DrawFrame(void)
     if (s_panel_fb != NULL) {
         const int64_t t_dither0 = esp_timer_get_time();
 
-        // Rotate on the way in.
+        // Byte-composition blit.
         //
-        // Doom renders 400x300 landscape; the panel is addressed 300x400
-        // portrait. The rotation is a coordinate swap at blit time -- Doom's
-        // (x, y) becomes the panel's (y, x) -- rather than anything to do with
-        // how bytes are packed. Getting this backwards is what put the picture
-        // on its side for several rounds.
-        for (int y = 0; y < DOOMGENERIC_RESY; y++) {
-            const uint8_t *row = DG_ScreenBuffer + (size_t)y * DOOMGENERIC_RESX;
+        // The previous version called ST7305_SetPixel 120000 times a frame, each
+        // doing a bounds check, two mapping branches, and a read-modify-write of
+        // one bit. Eight pixels share a byte, so that was 8 reads and 8 writes
+        // where one write does.
+        //
+        // Here each output byte is composed whole in a register. The mapping is
+        // fixed rather than re-derived per pixel:
+        //
+        //   blit transposes Doom (dx,dy) -> panel (px,py) = (dy,dx)
+        //   mapping 1 mirrors X, so px = 299 - dy
+        //   byte index = (dx/2)*75 + (px/4)      bit = 7 - ((px&3)*2 + (dx&1))
+        //
+        // which makes one byte exactly 4 consecutive Doom rows x 2 consecutive
+        // Doom columns. Iterating byte-columns outermost keeps those 4 row
+        // pointers walking forward through PSRAM -- the slow side -- while the
+        // strided writes land in fast internal RAM.
+        //
+        // Only valid for mapping 1 + Bayer; anything else takes the general path.
+        if (ST7305_Mapping == 1 && s_dither == DitherBayer) {
+            const uint8_t *vb = DG_ScreenBuffer;
 
-            // Hoist the Bayer row: y is constant across this loop, so the
-            // matrix row is fixed and only the low 3 bits of x select within it.
-            const uint8_t *brow = &bayer8[(y & 7) << 3];
+            for (int k = 0; k < ST7305_ROW_BYTES; k++) {
+                const int dy0 = (DOOMGENERIC_RESY - 1) - 4 * k;
 
-            if (s_dither == DitherBayer) {
-                // Fast path. The generic version called through a function
-                // pointer once per pixel -- 120000 indirect calls a frame, none
-                // of them inlinable. This is the same arithmetic with the call
-                // removed.
-                for (int x = 0; x < DOOMGENERIC_RESX; x++) {
-                    ST7305_SetPixel(s_panel_fb, y, x,
-                                    DG_Palette[row[x]] < brow[x & 7]);
+                const uint8_t *r0 = vb + (size_t)(dy0    ) * DOOMGENERIC_RESX;
+                const uint8_t *r1 = vb + (size_t)(dy0 - 1) * DOOMGENERIC_RESX;
+                const uint8_t *r2 = vb + (size_t)(dy0 - 2) * DOOMGENERIC_RESX;
+                const uint8_t *r3 = vb + (size_t)(dy0 - 3) * DOOMGENERIC_RESX;
+
+                const uint8_t *b0 = &bayer8[((dy0    ) & 7) << 3];
+                const uint8_t *b1 = &bayer8[((dy0 - 1) & 7) << 3];
+                const uint8_t *b2 = &bayer8[((dy0 - 2) & 7) << 3];
+                const uint8_t *b3 = &bayer8[((dy0 - 3) & 7) << 3];
+
+                uint8_t *out = s_panel_fb + k;
+
+                for (int dx = 0; dx < DOOMGENERIC_RESX; dx += 2) {
+                    const int e = dx & 7, o = (dx + 1) & 7;
+                    uint8_t v = 0;
+
+                    if (DG_Palette[r0[dx    ]] < b0[e]) v |= 0x80;
+                    if (DG_Palette[r0[dx + 1]] < b0[o]) v |= 0x40;
+                    if (DG_Palette[r1[dx    ]] < b1[e]) v |= 0x20;
+                    if (DG_Palette[r1[dx + 1]] < b1[o]) v |= 0x10;
+                    if (DG_Palette[r2[dx    ]] < b2[e]) v |= 0x08;
+                    if (DG_Palette[r2[dx + 1]] < b2[o]) v |= 0x04;
+                    if (DG_Palette[r3[dx    ]] < b3[e]) v |= 0x02;
+                    if (DG_Palette[r3[dx + 1]] < b3[o]) v |= 0x01;
+
+                    *out = v;
+                    out += ST7305_ROW_BYTES;
                 }
-            } else {
+            }
+        } else {
+            for (int y = 0; y < DOOMGENERIC_RESY; y++) {
+                const uint8_t *row = DG_ScreenBuffer + (size_t)y * DOOMGENERIC_RESX;
                 for (int x = 0; x < DOOMGENERIC_RESX; x++) {
                     ST7305_SetPixel(s_panel_fb, y, x,
                                     s_dither(x, y, DG_Palette[row[x]]));
@@ -182,6 +216,21 @@ void DG_DrawFrame(void)
         acc_flush_us = 0;
         frames_window_start_ms = now;
     }
+}
+
+// Point the panel blit straight at Doom's own framebuffer, releasing the
+// separate copy allocated at init. See I_FinishUpdate.
+void DG_AdoptVideoBuffer(uint8_t *buf)
+{
+    if (buf == NULL || buf == DG_ScreenBuffer) {
+        return;
+    }
+    uint8_t *old = DG_ScreenBuffer;
+    DG_ScreenBuffer = buf;
+    if (old) {
+        heap_caps_free(old);
+    }
+    ESP_LOGI(TAG, "blitting directly from I_VideoBuffer (dropped the per-frame copy)");
 }
 
 void DG_SetWindowTitle(const char *title)

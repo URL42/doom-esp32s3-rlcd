@@ -249,12 +249,18 @@ _Static_assert(DOOMGENERIC_RESX == SCREENWIDTH && DOOMGENERIC_RESY == SCREENHEIG
 
 void I_FinishUpdate (void)
 {
-	// Copy rather than alias I_VideoBuffer. The two buffers could be one -- the
-	// formats are now identical -- but the panel push will eventually be an async
-	// SPI DMA transfer, and Doom starts drawing the next frame the moment this
-	// returns. Sharing the buffer would let the renderer scribble into memory the
-	// DMA engine is still reading.
-	memcpy(DG_ScreenBuffer, I_VideoBuffer, SCREENWIDTH * SCREENHEIGHT);
+	// Alias rather than copy.
+	//
+	// This used to memcpy 120KB PSRAM->PSRAM every frame to protect against an
+	// async DMA flush reading the buffer while Doom drew the next frame. That
+	// flush is synchronous (spi_device_polling_transmit), so DG_DrawFrame has
+	// finished with the pixels before this returns and the copy is pure cost.
+	//
+	// If the flush ever becomes async, this has to go back to double buffering.
+	if (DG_ScreenBuffer != I_VideoBuffer) {
+		extern void DG_AdoptVideoBuffer(uint8_t *buf);
+		DG_AdoptVideoBuffer(I_VideoBuffer);
+	}
 
 	DG_DrawFrame();
 }
