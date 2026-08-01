@@ -49,7 +49,15 @@ static const char *TAG = "st7305";
 // 0 mirrors the display. Bit0 mirrors X, bit1 mirrors Y.
 int ST7305_Mapping = 1;
 
-int ST7305_FlushMode = 0;   // 0 = flat dump, 1 = per-row addressing
+// 1 = per-row addressing. This is REQUIRED, not a preference.
+//
+// A flat dump was tried twice. The second attempt was declared working on the
+// strength of a frame-rate improvement -- which measures nothing about whether
+// the pixels land in the right place. It does not: the controller does not
+// auto-increment from the end of one row into the start of the next, and a flat
+// transfer smears the image into vertical striping. Confirmed on glass both
+// times. Do not re-enable mode 0 without looking at the panel.
+int ST7305_FlushMode = 1;
 
 static spi_device_handle_t s_spi;
 static bool s_ready;
