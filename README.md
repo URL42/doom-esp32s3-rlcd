@@ -5,7 +5,7 @@
 1993 Doom running on an ESP32-S3 driving a 4.2" **fully reflective** LCD — no backlight,
 300×400 native portrait, over SPI.
 
-Renders at ~32 fps, which is the panel's refresh rate — the CPU is not the limit.
+Renders at ~22 fps at the panel's full 400×300, 1 bit per pixel with ordered dithering.
 
 <br clear="right">
 
@@ -26,11 +26,11 @@ retargeted from an ILI9341 TFT to this board.
 | Boot, 8 MB octal PSRAM | working — verified on hardware |
 | Zone heap in PSRAM | working — 3 MB, placement asserted at runtime |
 | WAD via `esp_partition_mmap` | working — full 5 MB window, zero-copy lumps |
-| Game loop | working — demo runs, ~70 fps with display stubbed |
+| Game loop | working — demo runs, ~22 fps driving the panel |
 | Input over USB-Serial-JTAG | working |
 | Sound — game-side logic | working — channels, distance attenuation live |
 | Sound — audio output (ES8311) | **stub**, silent |
-| Display (ST7305, 1 bpp, Bayer dither) | working — ~32 fps, panel-limited |
+| Display (ST7305, 1 bpp, 8×8 Bayer) | working — full 400×300, flush-limited |
 
 ### The panel
 
@@ -55,7 +55,53 @@ black and white, so the palette LUT becomes a luminance table plus a dither, not
 conversion. Everything else — geometry, the 40/50 px window offsets, keeping the framebuffer
 8-bit indexed — was designed for this and carries over unchanged.
 
-At 32 Hz against Doom's 35 Hz tic rate, the panel is the constraint, as expected.
+At 32 Hz against Doom's 35 Hz tic rate, the panel refresh is the ceiling. We are not there
+yet — see [Performance](#performance).
+
+---
+
+## Performance
+
+Measured on hardware, per frame, at 400×300:
+
+| | dither | flush | fps |
+|---|---|---|---|
+| before optimisation | 25.5 ms | 24.7 ms | 14.6 |
+| now | **6.8 ms** | 25.7 ms | **22.4** |
+
+**The flush is now the bottleneck.** It is not data — 15000 bytes at 24 MHz is ~5 ms. It is
+*transaction overhead*: per-row addressing means 200 rows × 6 SPI transactions = 1200
+transactions per frame, each with fixed setup cost. Batching the row commands or queueing
+them so the driver pipelines rather than blocks should recover much of it.
+
+Per-row addressing is **required**, not a preference. The controller does not auto-increment
+from the end of one row into the start of the next; a single flat transfer smears the image
+into vertical striping. This was tested twice, and the second time was wrongly declared
+working on the basis of a frame-rate improvement — which measures nothing about whether
+pixels land in the right place. Do not re-enable `ST7305_FlushMode = 0` without looking at
+the panel.
+
+---
+
+## Console keys
+
+The game reads stdin, so these work over any serial terminal (`screen /dev/cu.usbmodem101
+115200`). They are intercepted before Doom sees them.
+
+| Key | Effect |
+|---|---|
+| `t` | grey-ramp calibration screen — 16 bands through the real tone pipeline |
+| `b` / `B` | raise / lower the black point |
+| `w` / `W` | raise / lower the white point |
+| `]` / `[` | curve darker / lighter |
+| `\` | toggle Bayer ↔ plain threshold |
+| `g` | de-ghost cycle (drives every pixel to both extremes) |
+| `o` | cycle orientation flips |
+| `f` | toggle flush mode — **flat is broken, see above** |
+
+Game controls: `W`/`S` forward/back, `A`/`D` strafe, `,`/`.` turn, space use, `F` fire,
+arrows, Enter/Esc/Tab, `1`–`7` weapons. Ctrl is not transmittable over a serial console,
+hence `F` for fire.
 
 ---
 
@@ -161,11 +207,23 @@ The frame is **not** scaled to fill the panel. `DOOMGENERIC_RESX/RESY` match Doo
 exactly and the driver centres it by offsetting its write window (40 px horizontal, 50 px
 vertical within the 400×300 landscape frame). A `_Static_assert` enforces this.
 
-### Monochrome conversion is dithered, and switchable
+### Tone is a levels stretch, not just a gamma
 
 The panel has one bit per pixel, so `DG_Palette` holds perceptual luminance (Rec.601 weights)
 rather than colour. A flat RGB average would wash out Doom's greens and leave foliage and the
 HUD too dark.
+
+Luminance then goes through a **levels stretch before any curve**: map
+`[black_point .. white_point]` onto the full 0–255 range, then apply a mild power curve.
+
+A single gamma cannot do this job, which is why tuning it alone oscillated past correct in
+both directions (2.4 → 3.2 → 1.9 → 1.0 → 0.8). Doom's palette is bottom-heavy — most of the
+game sits in the dark third of the range — so one global curve either crushes that to solid
+black or lifts everything including what should stay black. On a reflective panel the curve
+also wants to sit slightly *below* 1, because dithered dots visually gain like ink on paper.
+
+Press `t` for a 16-band grey ramp rendered through the identical path, and tune against that
+rather than against moving game frames.
 
 The 8-bit → 1-bit reduction sits behind a function pointer — `DG_SetDither(DG_DITHER_BAYER)`
 or `DG_DITHER_THRESHOLD` — so the options can be compared on the real panel rather than
@@ -227,9 +285,13 @@ Ctrl is not usable as fire over a serial console, hence `F`.
 
 ## Known issues
 
-- **`r_segs.c:399`** does `abs()` on an unsigned `angle_t`, which is a no-op. A real vanilla
-  bug that upstream Chocolate Doom fixed; it produces wrong wall scaling at certain angles and
-  will look like a display fault once there is a panel.
+- **Motion smear.** Moving edges drag for a few frames. Partly the panel's liquid-crystal
+  response time, which no code can fix, and partly our ~22 fps — each frame is held ~45 ms.
+  Raising the frame rate should reduce the perceived smear.
+- **Title and menu screens do not fill the panel.** `TITLEPIC`, the menus and the status bar
+  are fixed 320×200 assets in the WAD. The 3D view is resolution-independent and does fill
+  400×300, but the 2D artwork needs patch scaling at draw time to match, which is not yet
+  implemented.
 - **`snd_cachesize` defaults to 64 MB** in `i_sound.c` — meaningless on this board and worth
   reducing before the audio backend lands.
 - **`w_file_stdc.c`** is still compiled by the source glob and pulls `fopen`/`fread` in for a
