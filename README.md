@@ -129,30 +129,97 @@ Classic, which rules out most game controllers.
 
 ---
 
-## Build and flash
+## Setup from scratch
 
-Requires ESP-IDF **v5.x**.
+Assumes a Mac with the board and a USB-C cable, and nothing else installed.
+
+### 1. Install ESP-IDF v5.x
+
+**Version matters.** This will not build on v3 or v4 — those use a different
+component API (`register_component()` rather than `idf_component_register()`).
 
 ```bash
-. $IDF_PATH/export.sh
-idf.py set-target esp32s3
-idf.py build
-idf.py -p /dev/cu.usbmodem101 flash monitor
+mkdir -p ~/esp && cd ~/esp
+git clone -b v5.5.2 --recursive https://github.com/espressif/esp-idf.git
+cd esp-idf && ./install.sh esp32s3
 ```
 
-The WAD is **not** in this repo and is flashed separately to its own partition:
+Activate it in each new shell:
+
+```bash
+. ~/esp/esp-idf/export.sh
+```
+
+If you have more than one ESP-IDF installed, a stale `IDF_PATH` in your shell will
+make `export.sh` pick the wrong Python environment and fail with missing packages.
+`unset IDF_PATH` first if that happens.
+
+### 2. Build
+
+```bash
+git clone https://github.com/URL42/doom-esp32s3-rlcd.git
+cd doom-esp32s3-rlcd
+idf.py set-target esp32s3
+idf.py build
+```
+
+`sdkconfig` is generated and gitignored — `sdkconfig.defaults` is the source of
+truth. To change config: edit `sdkconfig.defaults`, **delete `sdkconfig`**, then
+`idf.py reconfigure`. Values already in `sdkconfig` otherwise win, so edits to
+the defaults file appear to do nothing.
+
+### 3. Flash the firmware
+
+```bash
+idf.py -p /dev/cu.usbmodem101 flash
+```
+
+Find your port with `ls /dev/cu.usbmodem*`. If it reports the port is busy, close
+Arduino IDE's **Serial Monitor** — it reclaims the port whenever the board
+re-enumerates. `lsof /dev/cu.usbmodem101` shows what is holding it.
+
+### 4. Flash a WAD
+
+The WAD is **not** in this repo and lives in its own flash partition:
 
 ```bash
 esptool.py -p /dev/cu.usbmodem101 write_flash 0x310000 doom1.wad
 ```
 
-Shareware `DOOM1.WAD` (4,196,020 bytes) is the target. Note that ESP_DOOM's bundled
-`doom1-cut.wad` has had **all `DS*` and `D_*` lumps stripped**, so it plays but is silent by
-construction.
+Shareware `DOOM1.WAD` is 4,196,020 bytes. ESP_DOOM's bundled `doom1-cut.wad`
+works but has **all `DS*` and `D_*` lumps stripped**, so it is silent by
+construction — use a real one if you want audio.
 
-`sdkconfig` is generated and gitignored — `sdkconfig.defaults` is the source of truth. Edit
-there, delete `sdkconfig`, then `idf.py reconfigure`; existing values otherwise win over the
-defaults file.
+### 5. Watch the console
+
+```bash
+screen /dev/cu.usbmodem101 115200
+```
+
+Quit with **Ctrl-A**, then **K**, then **y**. This is also how you reach the
+tuning keys (see [Console keys](#console-keys)). `idf.py monitor` works too but
+is fussier about the IDF environment.
+
+### 6. Pair a controller (optional)
+
+The board is **BLE only** — no Bluetooth Classic — so Switch/X-input gamepad
+modes cannot work at the silicon level. Put an 8BitDo Micro in **Keyboard mode**
+(the `K` switch position) and hold its pair button until the LED flashes. The
+board scans continuously and connects on its own; the console logs
+`controller connected`.
+
+Program the buttons in 8BitDo's Ultimate Software to send these:
+
+| Button | Key | Action |
+|---|---|---|
+| D-pad ↑ / ↓ | `W` / `S` | forward / back |
+| D-pad ← / → | `,` / `.` | turn |
+| Y / A | `A` / `D` | strafe left / right |
+| B | `F` | fire |
+| X | `Space` | use |
+| Start / Select | `Enter` / `Esc` | menu |
+
+---
 
 ---
 

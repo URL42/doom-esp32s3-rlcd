@@ -141,7 +141,25 @@ R_MapPlane
      || x2 >= viewwidth
      || y > viewheight)
     {
-	I_Error ("R_MapPlane: %i, %i at %i",x1,x2,y);
+	// Vanilla calls I_Error here, which kills the game outright. At 320x200
+	// that was defensible -- a degenerate span meant something was badly
+	// wrong. At 400x300 it fires on ordinary gameplay: certain viewing
+	// angles produce a span whose end precedes its start (seen: x1=374,
+	// x2=332), and the whole port dies mid-demo.
+	//
+	// Skipping the span drops at most a few pixels of floor or ceiling for
+	// one frame, which is invisible in motion and vastly preferable to an
+	// abort. Logged once so it stays visible rather than silently masked --
+	// this is a mitigation, not a diagnosis. The root cause is span
+	// arithmetic that still carries 320x200 assumptions.
+	static boolean warned = false;
+	if (!warned)
+	{
+	    warned = true;
+	    printf("R_MapPlane: degenerate span %i,%i at %i (skipping; "
+	           "further occurrences silent)\n", x1, x2, y);
+	}
+	return;
     }
 #endif
 
