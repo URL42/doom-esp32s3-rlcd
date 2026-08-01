@@ -319,7 +319,14 @@ void I_GetEvent(void)
             {
                 D_PostEvent(&event);
             }
-            break;
+
+            // Vanilla breaks out of the drain loop after the first key release.
+            // With a byte-stream console that was harmless -- releases were
+            // synthesised one at a time. With BLE HID the controller delivers
+            // real press and release as separate queue entries, so stopping
+            // after one release drains at most one keypress per tic and input
+            // lags further behind the longer you play. Keep draining.
+            continue;
         }
     }
 

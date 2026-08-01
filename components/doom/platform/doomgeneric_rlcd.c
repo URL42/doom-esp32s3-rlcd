@@ -350,6 +350,13 @@ void DG_SetWindowTitle(const char *title)
 
 #define MAX_HELD_KEYS 8
 
+// The queue is written from two tasks -- the console pump on the Doom task
+// (core 0) and the BLE HID callback on the radio task (core 1) -- and read from
+// the Doom task. head/tail are plain ints, so without a lock the two cores race
+// on them. That corrupts the queue and was resetting the board under sustained
+// controller input.
+static portMUX_TYPE key_mux = portMUX_INITIALIZER_UNLOCKED;
+
 static unsigned char key_queue[KEY_QUEUE_LEN];
 static int key_queue_pressed[KEY_QUEUE_LEN];
 static int key_queue_head;
@@ -364,14 +371,19 @@ static struct {
 // Returns non-zero if the event was queued.
 static int KeyQueuePush(int pressed, unsigned char key)
 {
+    int ok = 0;
+
+    portENTER_CRITICAL(&key_mux);
     int next = (key_queue_head + 1) % KEY_QUEUE_LEN;
-    if (next == key_queue_tail) {
-        return 0;  // Full. Never block the game loop.
+    if (next != key_queue_tail) {          // full -> drop, never block the loop
+        key_queue[key_queue_head] = key;
+        key_queue_pressed[key_queue_head] = pressed;
+        key_queue_head = next;
+        ok = 1;
     }
-    key_queue[key_queue_head] = key;
-    key_queue_pressed[key_queue_head] = pressed;
-    key_queue_head = next;
-    return 1;
+    portEXIT_CRITICAL(&key_mux);
+
+    return ok;
 }
 
 // Inject a real key event from a source that has genuine press/release --
@@ -609,13 +621,16 @@ int DG_GetKey(int *pressed, unsigned char *key)
     PumpConsole();
     ReleaseExpiredKeys();
 
+    portENTER_CRITICAL(&key_mux);
     if (key_queue_tail == key_queue_head) {
+        portEXIT_CRITICAL(&key_mux);
         return 0;
     }
 
     *pressed = key_queue_pressed[key_queue_tail];
     *key = key_queue[key_queue_tail];
     key_queue_tail = (key_queue_tail + 1) % KEY_QUEUE_LEN;
+    portEXIT_CRITICAL(&key_mux);
 
     // Bring-up aid: with no panel there is no other way to see that a keystroke
     // reached the game. ESP_LOGD so it costs nothing unless the log level is
