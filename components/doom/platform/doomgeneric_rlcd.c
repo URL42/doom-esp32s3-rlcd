@@ -55,6 +55,13 @@ void DG_SleepMs(uint32_t ms)
 static uint32_t frame_count;
 static uint32_t frames_window_start_ms;
 
+// Split timing. Guessing which half of the frame was expensive is what made the
+// last optimisation attempt miss -- the function-pointer removal was aimed at a
+// cost that turned out to be minor. Accumulated in microseconds over the 100
+// frame reporting window.
+static uint64_t acc_dither_us;
+static uint64_t acc_flush_us;
+
 // ---------------------------------------------------------------------------
 // Indexed -> 1bpp conversion
 // ---------------------------------------------------------------------------
@@ -117,6 +124,8 @@ static uint8_t *s_panel_fb;
 void DG_DrawFrame(void)
 {
     if (s_panel_fb != NULL) {
+        const int64_t t_dither0 = esp_timer_get_time();
+
         // Rotate on the way in.
         //
         // Doom renders 400x300 landscape; the panel is addressed 300x400
@@ -148,7 +157,12 @@ void DG_DrawFrame(void)
             }
         }
 
+        const int64_t t_flush0 = esp_timer_get_time();
+        acc_dither_us += (uint64_t)(t_flush0 - t_dither0);
+
         ST7305_Flush(s_panel_fb);
+
+        acc_flush_us += (uint64_t)(esp_timer_get_time() - t_flush0);
     }
 
     frame_count++;
@@ -158,9 +172,14 @@ void DG_DrawFrame(void)
         uint32_t elapsed = now - frames_window_start_ms;
         // Integer maths only: 100 frames in `elapsed` ms -> fps*100.
         uint32_t fps_x100 = elapsed ? (100u * 100u * 1000u) / elapsed : 0u;
-        ESP_LOGI(TAG, "frame %lu | 100 frames in %lu ms | %lu.%02lu fps",
-                 (unsigned long)frame_count, (unsigned long)elapsed,
-                 (unsigned long)(fps_x100 / 100u), (unsigned long)(fps_x100 % 100u));
+        ESP_LOGI(TAG, "frame %lu | %lu.%02lu fps | dither %lu.%01lu ms | flush %lu.%01lu ms | mode %s",
+                 (unsigned long)frame_count,
+                 (unsigned long)(fps_x100 / 100u), (unsigned long)(fps_x100 % 100u),
+                 (unsigned long)(acc_dither_us / 100000u), (unsigned long)((acc_dither_us / 10000u) % 10u),
+                 (unsigned long)(acc_flush_us  / 100000u), (unsigned long)((acc_flush_us  / 10000u) % 10u),
+                 ST7305_FlushMode ? "per-row" : "flat");
+        acc_dither_us = 0;
+        acc_flush_us = 0;
         frames_window_start_ms = now;
     }
 }
@@ -386,6 +405,11 @@ static void PumpConsole(void)
             float g = DG_GetGamma() + (c == ']' ? 0.2f : -0.2f);
             DG_SetGamma(g);
             ESP_LOGW(TAG, "gamma -> %.2f  (]=darker, [=lighter)", (double)DG_GetGamma());
+            continue;
+        }
+        if (c == 'f' || c == 'F') {
+            ST7305_FlushMode = !ST7305_FlushMode;
+            ESP_LOGW(TAG, "flush mode -> %s", ST7305_FlushMode ? "per-row" : "flat");
             continue;
         }
         if (c == 'g' || c == 'G') {

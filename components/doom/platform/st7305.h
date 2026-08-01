@@ -48,6 +48,18 @@ esp_err_t ST7305_Init(void);
 // Blocks until the transfer completes.
 esp_err_t ST7305_Flush(const uint8_t *packed);
 
+// Write strategy. 0 = one address window then a single flat 15000-byte transfer.
+// 1 = re-address every row (CASET/RASET/RAMWR per row, 200 rows).
+//
+// Row addressing was adopted after a flat dump produced striping -- but that
+// test ran while the packing still used the wrong-axis landscape mapping, so
+// the experiment was contaminated and the striping may well have been the
+// packing rather than the write mode. The esp_lcd reference driver flat-dumps
+// this same panel successfully. Kept switchable so the two can be compared
+// directly now that the packing is known good; flat is ~4x fewer SPI
+// transactions per frame.
+extern int ST7305_FlushMode;
+
 // Set every pixel of a packed buffer to white (the panel's rest state).
 void ST7305_ClearBuffer(uint8_t *packed);
 

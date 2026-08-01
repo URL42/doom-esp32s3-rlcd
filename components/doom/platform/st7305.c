@@ -43,7 +43,13 @@ static const char *TAG = "st7305";
 
 // Default 1 (row-major). The column-major variant put the image on screen but
 // rotated 90 degrees, and these two mappings differ by exactly that rotation.
+// NOTE: this is structural, not a preference. The blit transposes Doom's (x,y)
+// to the panel's (y,x); a transpose alone yields a MIRRORED image, and
+// transpose + mirror-X is what makes a true 90 degree rotation. Setting this to
+// 0 mirrors the display. Bit0 mirrors X, bit1 mirrors Y.
 int ST7305_Mapping = 1;
+
+int ST7305_FlushMode = 0;   // 0 = flat dump, 1 = per-row addressing
 
 static spi_device_handle_t s_spi;
 static bool s_ready;
@@ -251,7 +257,7 @@ esp_err_t ST7305_Init(void)
     }
 
     s_ready = true;
-    ESP_LOGI(TAG, "ST7305 up: %dx%d landscape, 1bpp, %d-byte frame, SPI %d MHz",
+    ESP_LOGI(TAG, "ST7305 up: %dx%d native portrait, 1bpp, %d-byte frame, SPI %d MHz",
              ST7305_W, ST7305_H, ST7305_FB_BYTES, ST7305_SPI_HZ / 1000000);
     return ESP_OK;
 }
@@ -262,34 +268,33 @@ esp_err_t ST7305_Flush(const uint8_t *packed)
         return ESP_ERR_INVALID_STATE;
     }
 
-    // Row-addressed, not a flat dump.
-    //
-    // Dumping all 15000 bytes after a single CASET/RASET assumes the controller
-    // auto-increments from the end of one row into the start of the next. It
-    // does not, and the result on glass is regular vertical striping -- the
-    // image is coherent but smeared across the wrong addresses.
-    //
-    // u8g2's driver for this exact 300x400 panel re-addresses every row, and
-    // that is what this now does: CASET, then RASET with start == end, then
-    // RAMWR, for each of the 200 addressable rows.
-    //
-    // Note CASET starts at 0x01, not 0x00. That is u8g2's value for this panel;
-    // starting at zero shifts every row by one column unit.
-    //
-    // CS stays asserted across the whole frame, as it must.
+    // CASET starts at 0x01, not 0x00 -- u8g2's value for this panel. Starting at
+    // zero shifts every row by one column unit.
     static const uint8_t caset[] = { 0x01, 0x2A };
 
     cs_select();
-
     esp_err_t e = ESP_OK;
-    for (int row = 0; row < ST7305_ROWS && e == ESP_OK; row++) {
-        const uint8_t raset[] = { (uint8_t)row, (uint8_t)row };
+
+    if (ST7305_FlushMode == 0) {
+        // Flat: one window, one data transfer. 4 SPI transactions per frame
+        // instead of 1200, and the 15000 bytes go out as a single DMA burst.
+        const uint8_t raset[] = { 0x00, (uint8_t)(ST7305_ROWS - 1) };
 
         e = wr(CMD_CASET, caset, sizeof(caset));
         if (e == ESP_OK) e = wr(CMD_RASET, raset, sizeof(raset));
         if (e == ESP_OK) e = wr_cmd(CMD_RAMWR);
-        if (e == ESP_OK) e = spi_tx(packed + (size_t)row * ST7305_ROW_BYTES,
-                                    ST7305_ROW_BYTES, true);
+        if (e == ESP_OK) e = spi_tx(packed, ST7305_FB_BYTES, true);
+    } else {
+        // Per-row: re-address each of the 200 rows.
+        for (int row = 0; row < ST7305_ROWS && e == ESP_OK; row++) {
+            const uint8_t raset[] = { (uint8_t)row, (uint8_t)row };
+
+            e = wr(CMD_CASET, caset, sizeof(caset));
+            if (e == ESP_OK) e = wr(CMD_RASET, raset, sizeof(raset));
+            if (e == ESP_OK) e = wr_cmd(CMD_RAMWR);
+            if (e == ESP_OK) e = spi_tx(packed + (size_t)row * ST7305_ROW_BYTES,
+                                        ST7305_ROW_BYTES, true);
+        }
     }
 
     cs_release();
