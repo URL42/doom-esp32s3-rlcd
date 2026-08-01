@@ -140,6 +140,13 @@ uint8_t DG_Palette[256];
 // lays down far too much ink and the picture goes to mostly-black. Tune with
 // [ and ] against real ambient light.
 static float s_gamma = 0.8f;
+// Levels endpoints. Everything at or below s_black becomes solid black, at or
+// above s_white solid white, and the range between is stretched across the full
+// dither scale. Defaults are a starting guess to be replaced by whatever the
+// grey-ramp screen shows.
+static int s_black = 8;
+static int s_white = 200;
+
 static byte s_last_palette[768];
 static int  s_have_palette;
 
@@ -299,17 +306,24 @@ void I_SetPalette (byte* palette)
 		unsigned y = (306u * r + 601u * g + 117u * b) >> 10;   // ~0.299/0.587/0.114
 		if (y > 255u) y = 255u;
 
-		// Gamma-darken before dithering.
+		// Levels stretch, then curve.
 		//
-		// A reflective LCD has far less dynamic range than a backlit one, and
-		// mapping luminance straight through an ordered dither leaves the image
-		// washed out -- most of Doom's midtones land above the Bayer thresholds
-		// and simply never lay down ink. Raising luminance to a power > 1 pushes
-		// midtones down so they actually cross a threshold, which is what gives
-		// the picture its contrast back. Pure white and pure black are fixed
-		// points, so highlights and shadows are not clipped.
-		float n = powf((float)y / 255.0f, s_gamma);
-		unsigned out = (unsigned)(n * 255.0f + 0.5f);
+		// A single gamma cannot fix this, which is why tuning it alone kept
+		// overshooting in both directions. Doom's palette is bottom-heavy --
+		// most of the game lives in the dark third of the range -- so a global
+		// power curve either crushes that to solid black or lifts everything
+		// including what should stay black.
+		//
+		// So: first map [black_point .. white_point] onto the full 0..255 range,
+		// which is what actually recovers contrast, and only then apply a mild
+		// curve. On a reflective panel the curve wants to sit slightly BELOW 1:
+		// dithered dots visually gain like ink on paper, so midtones read darker
+		// than their nominal value.
+		float f = ((float)y - (float)s_black) / (float)(s_white - s_black);
+		if (f < 0.0f) f = 0.0f;
+		if (f > 1.0f) f = 1.0f;
+
+		unsigned out = (unsigned)(powf(f, s_gamma) * 255.0f + 0.5f);
 
 		DG_Palette[i] = (uint8_t)(out > 255u ? 255u : out);
 
@@ -406,4 +420,24 @@ void DG_SetGamma(float gamma)
 float DG_GetGamma(void)
 {
 	return s_gamma;
+}
+
+void DG_SetLevels(int black, int white)
+{
+	if (black < 0)   black = 0;
+	if (white > 255) white = 255;
+	if (white <= black + 8) white = black + 8;
+
+	s_black = black;
+	s_white = white;
+
+	if (s_have_palette) {
+		I_SetPalette(s_last_palette);
+	}
+}
+
+void DG_GetLevels(int *black, int *white)
+{
+	if (black) *black = s_black;
+	if (white) *white = s_white;
 }

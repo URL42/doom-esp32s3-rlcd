@@ -81,6 +81,16 @@ void DG_SetDither(int mode);
 // Panel contrast. >1 darkens midtones so more pixels cross a dither threshold;
 // <1 lightens. Reflective LCDs need this pushed well above 1.
 void DG_SetGamma(float gamma);
+
+// Levels endpoints feeding the dither. Everything <= black is solid black,
+// >= white is solid white, and the span between is stretched across the full
+// range. This is the knob that actually recovers contrast on a 1-bit panel;
+// gamma alone cannot, because Doom's palette is bottom-heavy.
+// Draw a 16-band grey ramp through the real tone pipeline, for calibration.
+void DG_ShowGreyRamp(void);
+
+void DG_SetLevels(int black, int white);
+void DG_GetLevels(int *black, int *white);
 float DG_GetGamma(void);
 
 void DG_Init(void);

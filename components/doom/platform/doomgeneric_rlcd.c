@@ -9,6 +9,7 @@
 #include "doomkeys.h"
 #include "st7305.h"
 
+#include <math.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
@@ -220,6 +221,59 @@ void DG_DrawFrame(void)
 
 // Point the panel blit straight at Doom's own framebuffer, releasing the
 // separate copy allocated at init. See I_FinishUpdate.
+// Grey-ramp calibration screen.
+//
+// Tone has been tuned by comparing moving Doom frames in phone photos, which
+// overshot in both directions repeatedly. This puts a fixed reference on the
+// glass instead: 16 evenly spaced luminance bands pushed through the real
+// palette-to-dither path, so what you see is exactly what the game does with a
+// pixel of that brightness.
+//
+// Reading it: count how many bands are distinguishable. Bands that are solid
+// black at the bottom mean the black point is too high; bands that are solid
+// white at the top mean the white point is too low. Uneven spacing in the
+// middle is the curve.
+void DG_ShowGreyRamp(void)
+{
+    if (s_panel_fb == NULL) {
+        return;
+    }
+
+    int black, white;
+    DG_GetLevels(&black, &white);
+    ESP_LOGW(TAG, "grey ramp: 16 bands | levels %d..%d | gamma %.2f",
+             black, white, (double)DG_GetGamma());
+    ESP_LOGW(TAG, "  bands crushed to solid black at the dark end -> raise black with 'b'");
+    ESP_LOGW(TAG, "  bands blown to solid white at the light end -> lower white with 'w'");
+
+    ST7305_ClearBuffer(s_panel_fb);
+
+    // 16 vertical bands across Doom's 400px width, full 300px height.
+    for (int y = 0; y < DOOMGENERIC_RESY; y++) {
+        const uint8_t *brow = &bayer8[(y & 7) << 3];
+
+        for (int x = 0; x < DOOMGENERIC_RESX; x++) {
+            int band = (x * 16) / DOOMGENERIC_RESX;      // 0..15
+            int luma = (band * 255) / 15;                // 0..255, evenly spaced
+
+            // Same levels+curve the palette gets, so this reflects reality.
+            float f = ((float)luma - (float)black) / (float)(white - black);
+            if (f < 0.0f) f = 0.0f;
+            if (f > 1.0f) f = 1.0f;
+            int shown = (int)(powf(f, DG_GetGamma()) * 255.0f + 0.5f);
+
+            // A one-pixel separator between bands so boundaries stay readable
+            // even where two bands dither identically.
+            int edge = ((x * 16) % DOOMGENERIC_RESX) < 16;
+            int ink  = edge ? ((y & 3) == 0) : (shown < brow[x & 7]);
+
+            ST7305_SetPixel(s_panel_fb, y, x, ink);
+        }
+    }
+
+    ST7305_Flush(s_panel_fb);
+}
+
 void DG_AdoptVideoBuffer(uint8_t *buf)
 {
     if (buf == NULL || buf == DG_ScreenBuffer) {
@@ -454,6 +508,26 @@ static void PumpConsole(void)
             float g = DG_GetGamma() + (c == ']' ? 0.2f : -0.2f);
             DG_SetGamma(g);
             ESP_LOGW(TAG, "gamma -> %.2f  (]=darker, [=lighter)", (double)DG_GetGamma());
+            continue;
+        }
+        if (c == 't' || c == 'T') {
+            DG_ShowGreyRamp();
+            continue;
+        }
+        if (c == 'b' || c == 'B') {
+            int bl, wh; DG_GetLevels(&bl, &wh);
+            bl += (c == 'B') ? -4 : 4;
+            DG_SetLevels(bl, wh);
+            DG_GetLevels(&bl, &wh);
+            ESP_LOGW(TAG, "levels -> black %d, white %d", bl, wh);
+            continue;
+        }
+        if (c == 'w' || c == 'W') {
+            int bl, wh; DG_GetLevels(&bl, &wh);
+            wh += (c == 'W') ? 4 : -4;
+            DG_SetLevels(bl, wh);
+            DG_GetLevels(&bl, &wh);
+            ESP_LOGW(TAG, "levels -> black %d, white %d", bl, wh);
             continue;
         }
         if (c == 'f' || c == 'F') {
