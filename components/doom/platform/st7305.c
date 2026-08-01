@@ -293,12 +293,21 @@ esp_err_t ST7305_Flush(const uint8_t *packed)
         if (e == ESP_OK) e = wr_cmd(CMD_RAMWR);
         if (e == ESP_OK) e = spi_tx(packed, ST7305_FB_BYTES, true);
     } else {
-        // Per-row: re-address each of the 200 rows.
+        // Per-row addressing, but with the column window hoisted.
+        //
+        // CASET is byte-identical on every row -- the window never changes -- so
+        // re-sending it 200 times was 400 SPI transactions doing nothing. Only
+        // RASET has to move. That takes the frame from 1200 transactions to 802.
+        //
+        // The remaining cost is the DC line: a command needs DC low and its
+        // arguments DC high, so each command+args pair is irreducibly two
+        // transactions. RASET(cmd) + RASET(args) + RAMWR(cmd) + data = 4 per row.
+        e = wr(CMD_CASET, caset, sizeof(caset));
+
         for (int row = 0; row < ST7305_ROWS && e == ESP_OK; row++) {
             const uint8_t raset[] = { (uint8_t)row, (uint8_t)row };
 
-            e = wr(CMD_CASET, caset, sizeof(caset));
-            if (e == ESP_OK) e = wr(CMD_RASET, raset, sizeof(raset));
+            e = wr(CMD_RASET, raset, sizeof(raset));
             if (e == ESP_OK) e = wr_cmd(CMD_RAMWR);
             if (e == ESP_OK) e = spi_tx(packed + (size_t)row * ST7305_ROW_BYTES,
                                         ST7305_ROW_BYTES, true);
