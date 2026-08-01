@@ -152,7 +152,13 @@ static esp_err_t panel_init_sequence(void)
     W(0xB8, 0x29);                             // panel setting: 1-dot inversion
 
     W(0x35, 0x00);                             // TE setting
-    W(0xD0, 0xFF);                             // enable auto power down
+    // Auto power down OFF (0xFF enables it).
+    //
+    // Letting the panel power down between updates leaves charge sitting in the
+    // pixels, which on a reflective LCD shows up as residual images that fade
+    // slowly -- the ghosting seen here. Keeping it driven costs power we do not
+    // care about on USB, and the panel is refreshing at 32Hz anyway.
+    W(0xD0, 0x00);
     C(0x38);                                   // high power mode on
 
     // Inversion OFF, back to Waveshare's value for this panel. Switching this
@@ -342,4 +348,22 @@ void ST7305_TestPattern(uint8_t *packed, int hold_ms)
     ESP_LOGW(TAG, "TEST PATTERN: border + solid block TOP-LEFT + diagonal + grey ramp right");
     ST7305_Flush(packed);
     vTaskDelay(pdMS_TO_TICKS(hold_ms));
+}
+
+void ST7305_Deghost(uint8_t *scratch)
+{
+    if (!s_ready) {
+        return;
+    }
+    // Drive every pixel to both extremes before returning to content. Reflective
+    // pixels relax toward whatever they were last held at, so a full swing in
+    // each direction resets them; leaving out either half leaves the ghost of
+    // the polarity that was skipped.
+    ESP_LOGI(TAG, "de-ghost cycle");
+    memset(scratch, 0xFF, ST7305_FB_BYTES);
+    ST7305_Flush(scratch);
+    vTaskDelay(pdMS_TO_TICKS(120));
+    memset(scratch, 0x00, ST7305_FB_BYTES);
+    ST7305_Flush(scratch);
+    vTaskDelay(pdMS_TO_TICKS(120));
 }

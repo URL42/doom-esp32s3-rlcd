@@ -388,6 +388,12 @@ static void PumpConsole(void)
             ESP_LOGW(TAG, "gamma -> %.2f  (]=darker, [=lighter)", (double)DG_GetGamma());
             continue;
         }
+        if (c == 'g' || c == 'G') {
+            if (s_panel_fb) {
+                ST7305_Deghost(s_panel_fb);
+            }
+            continue;
+        }
         if (c == 'o' || c == 'O') {
             ST7305_Mapping = (ST7305_Mapping + 1) & 3;
             ESP_LOGW(TAG, "pixel mapping -> %d (%s, y%s)", ST7305_Mapping,

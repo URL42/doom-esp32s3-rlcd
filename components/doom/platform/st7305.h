@@ -59,6 +59,10 @@ void ST7305_ClearBuffer(uint8_t *packed);
 // are readable at a glance.
 void ST7305_TestPattern(uint8_t *packed, int hold_ms);
 
+// Drive every pixel to both extremes to clear retained images. Uses the buffer
+// passed in as scratch, so the caller must redraw afterwards.
+void ST7305_Deghost(uint8_t *scratch);
+
 // Set one pixel in a packed buffer. `black` selects ink rather than background.
 // Coordinates are landscape 0..399 x 0..299. Bounds-checked.
 // Pixel mapping variant. Two are dimensionally valid for a 15000-byte buffer:
