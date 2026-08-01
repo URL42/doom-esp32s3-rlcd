@@ -12,6 +12,7 @@ idf_component_register(
     INCLUDE_DIRS "include" "platform"
     REQUIRES esp_partition esp_timer esp_system freertos heap log vfs
              esp_driver_usb_serial_jtag esp_driver_spi esp_driver_gpio
+             bt esp_hid nvs_flash
 )
 
 # 1993 C, compiled by GCC 14. None of these indicate a real defect in the game;

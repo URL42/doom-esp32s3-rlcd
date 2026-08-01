@@ -374,6 +374,17 @@ static int KeyQueuePush(int pressed, unsigned char key)
     return 1;
 }
 
+// Inject a real key event from a source that has genuine press/release --
+// currently BLE HID. This bypasses the hold-and-release timer entirely: that
+// exists only because a serial terminal sends a byte stream with no key-up, and
+// synthesising a release when a real one is coming would cut movement short.
+void DG_InjectKey(int pressed, unsigned char key)
+{
+    if (key) {
+        KeyQueuePush(pressed, key);
+    }
+}
+
 // Register a key as pressed, or extend its hold if it already is.
 static void KeyPress(unsigned char key)
 {
@@ -695,4 +706,10 @@ void DG_Init(void)
     // Keep key tracing visible during bring-up without turning on debug logging
     // globally. Drop this once there is a panel to watch instead.
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
+
+    // Controller input. Non-fatal: the console keys keep working without it.
+    extern esp_err_t BLE_InputInit(void);
+    if (BLE_InputInit() != ESP_OK) {
+        ESP_LOGE(TAG, "BLE input unavailable -- console input only");
+    }
 }
