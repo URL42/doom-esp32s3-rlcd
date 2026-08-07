@@ -81,6 +81,10 @@ void ST7305_Deghost(uint8_t *scratch);
 // commented out. Motion smear is liquid-crystal settling time, not bandwidth --
 // raising the frame rate makes it worse, because pixels get less time to finish
 // transitioning before being told to change again.
+// Sync flushes to the panel's tear-effect signal (GPIO6) rather than writing at
+// an arbitrary phase of its 32Hz refresh.
+extern int ST7305_UseTE;
+
 extern int ST7305_EQProfile;
 esp_err_t ST7305_SetEQProfile(int fast);
 

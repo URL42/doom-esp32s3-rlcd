@@ -10,6 +10,7 @@
 #include "driver/spi_master.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -58,6 +59,30 @@ int ST7305_Mapping = 1;
 // transfer smears the image into vertical striping. Confirmed on glass both
 // times. Do not re-enable mode 0 without looking at the panel.
 int ST7305_FlushMode = 1;
+
+// Wait for the panel's tear-effect signal before writing.
+//
+// The panel self-refreshes at 32Hz. Flushing whenever the game loop happens to
+// finish lands the write at a random phase against that cycle, so pixels get
+// re-driven partway through settling. TE (GPIO6) pulses at the start of each
+// refresh; syncing to it means a frame is written into a consistent point in
+// the panel's cycle instead of an arbitrary one.
+//
+// This is what TE is for, and it is the one mechanism aimed squarely at motion
+// artefacts that had never been tried -- frame pacing and gate-EQ both change
+// how long pixels get, not when they are disturbed.
+// DEFAULT OFF: TE does not toggle on this board.
+//
+// Measured with it enabled, flush went 17.5ms -> 39.3ms, which is the 40ms
+// bail-out timing out on every single frame -- we wait for an edge that never
+// arrives. Frame rate fell 27 -> 17 fps for no benefit.
+//
+// The init does enable the tearing effect line (0x35, 0x00 = V-blank only), so
+// the likely explanations are that the pin is left floating (it is configured
+// as a plain input with no pull), that the panel only drives TE in a mode we
+// are not using, or that it is not routed on this board. Worth revisiting with
+// a scope on GPIO6 before writing any more code against it.
+int ST7305_UseTE = 0;
 
 static spi_device_handle_t s_spi;
 static bool s_ready;
@@ -272,10 +297,31 @@ esp_err_t ST7305_Init(void)
     return ESP_OK;
 }
 
+// Block until the panel signals the start of a refresh, or bail out after a
+// sensible bound. A missed edge must never stall the game loop.
+static void wait_for_te(void)
+{
+    // 32Hz is ~31ms, so anything past ~40ms means TE is not toggling -- the pin
+    // may be unconnected on this board, or the panel may not drive it in this
+    // mode. Give up rather than hang.
+    const int64_t deadline = esp_timer_get_time() + 40000;
+
+    int start = gpio_get_level(PIN_TE);
+    while (gpio_get_level(PIN_TE) == start) {
+        if (esp_timer_get_time() > deadline) {
+            return;
+        }
+    }
+}
+
 esp_err_t ST7305_Flush(const uint8_t *packed)
 {
     if (!s_ready) {
         return ESP_ERR_INVALID_STATE;
+    }
+
+    if (ST7305_UseTE) {
+        wait_for_te();
     }
 
     // CASET starts at 0x01, not 0x00 -- u8g2's value for this panel. Starting at

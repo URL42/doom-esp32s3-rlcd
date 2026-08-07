@@ -555,6 +555,11 @@ static void PumpConsole(void)
             if (s_ramp_hold) DG_ShowGreyRamp();
             continue;
         }
+        if (c == 'v' || c == 'V') {
+            ST7305_UseTE = !ST7305_UseTE;
+            ESP_LOGW(TAG, "TE sync -> %s", ST7305_UseTE ? "ON" : "OFF");
+            continue;
+        }
         if (c == 'e' || c == 'E') {
             ST7305_SetEQProfile(!ST7305_EQProfile);
             continue;
