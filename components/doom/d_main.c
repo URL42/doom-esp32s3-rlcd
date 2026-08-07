@@ -1311,9 +1311,17 @@ void D_DoomMain (void)
     else
 #endif
     {
-        // Auto-detect the configuration dir.
+        // Savegames and default.cfg go on the FAT storage partition. Without a
+        // mounted filesystem the auto-detected directory is "." and every write
+        // silently fails, so nothing is ever persisted. Falls back to the old
+        // behaviour if the mount does not come up -- the game still plays, it
+        // just cannot save.
+        {
+            extern const char *Storage_Mount(void);
+            const char *savedir = Storage_Mount();
 
-        M_SetConfigDir(NULL);
+            M_SetConfigDir(savedir ? (char *)savedir : NULL);
+        }
     }
 
     //!
