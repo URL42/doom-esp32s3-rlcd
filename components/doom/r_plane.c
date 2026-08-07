@@ -49,7 +49,15 @@ visplane_t*		floorplane;
 visplane_t*		ceilingplane;
 
 // ?
-#define MAXOPENINGS	SCREENWIDTH*64
+// Vanilla is SCREENWIDTH*64, where 64 is tuned for a 200-tall screen: the
+// openings array stores per-column clipping runs, and how much each column
+// consumes scales with screen HEIGHT, not width. Scaling only by width
+// under-provisions badly at 400x300, where the view is 268 rows rather than
+// 168 -- and r_segs.c writes here with no bounds check of its own, so the
+// overrun is silent. It corrupts the heap, and the damage only surfaces later
+// when Z_FreeTags walks the block list during the next P_SetupLevel, which
+// presented as "New Game crashes and the board reboots into the demo".
+#define MAXOPENINGS	(SCREENWIDTH * 64 * SCREENHEIGHT / 200)
 short*			openings;
 short*			lastopening;
 
