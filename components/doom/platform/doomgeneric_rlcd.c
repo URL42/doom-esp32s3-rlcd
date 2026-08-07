@@ -129,9 +129,14 @@ void DG_SetDither(int mode)
 // Packed 1bpp frame in the ST7305's own layout.
 static uint8_t *s_panel_fb;
 
+// While set, DG_DrawFrame leaves the panel alone. The grey ramp is drawn once
+// and would otherwise be overwritten by the very next game frame ~40ms later --
+// far too briefly to look at, let alone photograph. Toggled with 't'.
+static int s_ramp_hold;
+
 void DG_DrawFrame(void)
 {
-    if (s_panel_fb != NULL) {
+    if (s_panel_fb != NULL && !s_ramp_hold) {
         const int64_t t_dither0 = esp_timer_get_time();
 
         // Byte-composition blit.
@@ -547,6 +552,7 @@ static void PumpConsole(void)
             float g = DG_GetGamma() + (c == ']' ? 0.2f : -0.2f);
             DG_SetGamma(g);
             ESP_LOGW(TAG, "gamma -> %.2f  (]=darker, [=lighter)", (double)DG_GetGamma());
+            if (s_ramp_hold) DG_ShowGreyRamp();
             continue;
         }
         if (c == 'e' || c == 'E') {
@@ -565,7 +571,12 @@ static void PumpConsole(void)
             continue;
         }
         if (c == 't' || c == 'T') {
-            DG_ShowGreyRamp();
+            s_ramp_hold = !s_ramp_hold;
+            if (s_ramp_hold) {
+                DG_ShowGreyRamp();
+            } else {
+                ESP_LOGW(TAG, "ramp dismissed -- game resumes");
+            }
             continue;
         }
         if (c == 'b' || c == 'B') {
@@ -574,6 +585,7 @@ static void PumpConsole(void)
             DG_SetLevels(bl, wh);
             DG_GetLevels(&bl, &wh);
             ESP_LOGW(TAG, "levels -> black %d, white %d", bl, wh);
+            if (s_ramp_hold) DG_ShowGreyRamp();
             continue;
         }
         if (c == 'w' || c == 'W') {
@@ -582,6 +594,7 @@ static void PumpConsole(void)
             DG_SetLevels(bl, wh);
             DG_GetLevels(&bl, &wh);
             ESP_LOGW(TAG, "levels -> black %d, white %d", bl, wh);
+            if (s_ramp_hold) DG_ShowGreyRamp();
             continue;
         }
         if (c == 'f' || c == 'F') {
