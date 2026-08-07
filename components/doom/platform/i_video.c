@@ -144,8 +144,17 @@ static float s_gamma = 0.8f;
 // above s_white solid white, and the range between is stretched across the full
 // dither scale. Defaults are a starting guess to be replaced by whatever the
 // grey-ramp screen shows.
+// Calibrated against the grey ramp on the actual panel rather than guessed.
+//
+// At white=200 the top three of sixteen bands were indistinguishable from each
+// other -- band 13 sits at luma 221, so everything from 200 up saturated to
+// pure white and roughly the top fifth of the tonal range was being thrown
+// away. That is what "washed out" was, stated as a number.
+//
+// Black stays at 8: band 1 is luma 0 and correctly reads solid black, while
+// band 2 remains distinguishable, so the dark end is already using its range.
 static int s_black = 8;
-static int s_white = 200;
+static int s_white = 255;
 
 static byte s_last_palette[768];
 static int  s_have_palette;
