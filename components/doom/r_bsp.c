@@ -87,7 +87,8 @@ typedef	struct
 // range per two columns -- each range needs at least one column and at least
 // one column of gap before the next -- plus the two sentinels that
 // R_ClearClipSegs installs. At 400 that is 202 entries, 1616 bytes of .bss,
-// which is not worth economising on.
+// which is not worth economising on. Rounded up so the bound also holds for
+// an odd SCREENWIDTH.
 //
 // This array is NOT the cause of the New Game crash, despite looking like a
 // good candidate. It lives in internal SRAM and the zone lives in PSRAM, and
@@ -97,11 +98,19 @@ typedef	struct
 // doing the overrunning and faults instantly rather than corrupting anything
 // quietly. It is fixed here because it is a real unguarded overflow, not
 // because it explains that bug.
-#define MAXSEGS		(SCREENWIDTH / 2 + 2)
+#define MAXSEGS		((SCREENWIDTH + 1) / 2 + 2)
 
 // newend is one past the last valid seg
 cliprange_t*	newend;
-cliprange_t	solidsegs[MAXSEGS];
+
+// One spare entry beyond MAXSEGS, deliberately. The crunch loop below is
+// `while (next++ != newend)` -- post-increment, so the final iteration runs
+// with next == newend and reads *newend. With a full array that reads one
+// element past the end. It is harmless in vanilla (the write target always
+// trails next, and the junk lands above the tail sentinel where the
+// R_ClipSolidWallSegment scan cannot reach it) but "the array is bounded"
+// should be true as written rather than true by argument.
+cliprange_t	solidsegs[MAXSEGS + 1];
 
 
 

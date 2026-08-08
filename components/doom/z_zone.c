@@ -76,6 +76,16 @@ memzone_t*	mainzone;
 #if ZONE_DEBUG
 static unsigned	zone_alloc_seq;
 static int	zone_reported;		// only ever print the first failure
+
+// Snapshot of the zone's extent, taken in Z_Init and never touched again.
+//
+// The validator must not take its bounds from mainzone->size, because that
+// lives in the first four bytes of the zone -- inside the object it is trying
+// to distrust. A wild write that enlarges it would widen the accepted address
+// range and let the walk follow pointers out of the allocation, which is
+// precisely the failure this function exists to not have.
+static const byte*	zone_lo;
+static const byte*	zone_hi;
 #endif
 
 
@@ -116,6 +126,11 @@ void Z_Init (void)
 
     mainzone = (memzone_t *)I_ZoneBase (&size);
     mainzone->size = size;
+
+#if ZONE_DEBUG
+    zone_lo = (const byte *)mainzone;
+    zone_hi = zone_lo + size;
+#endif
 
     // set the entire zone to one free block
     mainzone->blocklist.next =
@@ -276,8 +291,10 @@ Z_Malloc
         newblock->tag = PU_FREE;
         newblock->user = NULL;
 #if ZONE_DEBUG
-        // The fragment is free, so it has no owner. Zeroing rather than
-        // leaving whatever was in the memory keeps the report honest.
+        // A fresh fragment has never had an owner, so it gets none. Note
+        // this differs deliberately from Z_Free, which leaves caller/seq
+        // alone: a freed block keeps its last owner, which is usually the
+        // more informative answer when one turns up next to damage.
         newblock->caller = NULL;
         newblock->seq = 0;
 #endif
@@ -464,11 +481,9 @@ void Z_CheckHeap (void)
 
 static int Z_BlockInZone (const memblock_t *block)
 {
-    const byte *lo = (const byte *)mainzone;
-    const byte *hi = lo + mainzone->size;
-    const byte *p  = (const byte *)block;
+    const byte *p = (const byte *)block;
 
-    if (p < lo || p + sizeof(memblock_t) > hi)
+    if (p < zone_lo || p + sizeof(memblock_t) > zone_hi)
 	return 0;
 
     if (((size_t)p & (MEM_ALIGN - 1)) != 0)
@@ -482,6 +497,17 @@ static void Z_DumpBlock (const char *label, const memblock_t *block)
     if (block == NULL)
     {
 	printf ("  %-4s @ (null)\n", label);
+	return;
+    }
+
+    if (block == &mainzone->blocklist)
+    {
+	// The list head is not an allocation. Z_Init never initialises its
+	// size or id, so dumping it prints noise, and "the block in front
+	// overran its buffer" is meaningless for a sentinel.
+	printf ("  %-4s @ %p  the blocklist head -- the damage is at the "
+		"first block, nothing precedes it\n", label,
+		(const void *)block);
 	return;
     }
 
@@ -548,8 +574,12 @@ int Z_ValidateHeap (const char *when)
 	    break;
 	}
 
-	if (block->size <= (int)sizeof(memblock_t)
-	 || (byte *)block + block->size > (byte *)mainzone + mainzone->size)
+	// Z_Malloc(0) is legal and produces a block of exactly the header
+	// size, so the predicate is < rather than <=. A false positive here
+	// would latch zone_reported and silence the validator for the rest
+	// of the run on a perfectly healthy heap.
+	if (block->size < (int)sizeof(memblock_t)
+	 || (const byte *)block + block->size > zone_hi)
 	{
 	    reason = "size is impossible";
 	    break;
@@ -569,11 +599,33 @@ int Z_ValidateHeap (const char *when)
 
 	// Blocks are contiguous, except that the last one runs to the end of
 	// the zone and wraps to the list head rather than to its neighbour.
-	if (block->next != &mainzone->blocklist
-	 && (byte *)block + block->size != (byte *)block->next)
+	if (block->next == &mainzone->blocklist)
 	{
-	    reason = "block does not touch the next block";
-	    break;
+	    if ((const byte *)block + block->size != zone_hi)
+	    {
+		reason = "last block does not run to the end of the zone";
+		break;
+	    }
+	}
+	else
+	{
+	    if ((const byte *)block + block->size != (byte *)block->next)
+	    {
+		reason = "block does not touch the next block";
+		break;
+	    }
+
+	    // Z_Free merges only what it sees tagged PU_FREE, so a tag
+	    // trampled into or out of PU_FREE leaves a list that is
+	    // structurally perfect and semantically wrong. This is the one
+	    // invariant that catches that.
+	    if (block->tag == PU_FREE
+	     && Z_BlockInZone (block->next)
+	     && block->next->tag == PU_FREE)
+	    {
+		reason = "two consecutive free blocks";
+		break;
+	    }
 	}
 
 	// A corrupt next could point backwards and loop forever.
@@ -585,6 +637,19 @@ int Z_ValidateHeap (const char *when)
 
 	prev = block;
 	block = block->next;
+    }
+
+    // The rover is not on the walk, and Z_Malloc dereferences it twice
+    // (base = rover; base->prev->tag) before it walks anything. A trampled
+    // rover therefore crashes inside the allocator while a blocklist-only
+    // check reports the heap intact.
+    if (reason == NULL
+     && mainzone->rover != &mainzone->blocklist
+     && !Z_BlockInZone (mainzone->rover))
+    {
+	reason = "rover is not a block in the zone";
+	block = mainzone->rover;
+	prev = NULL;
     }
 
     if (reason == NULL)

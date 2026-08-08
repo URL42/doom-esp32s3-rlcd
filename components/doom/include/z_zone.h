@@ -67,9 +67,11 @@ enum
 // single field is wrong, nothing overran anything -- a stray pointer wrote
 // four bytes, which is a different hunt entirely.
 //
-// Costs 8 bytes per block (24-byte header -> 32, which keeps the 8-byte
-// alignment the header already had) and a list walk wherever it is called.
-// Set to 0 for release builds.
+// Costs 8 bytes per block (24-byte header -> 32) and a list walk wherever it
+// is called. Note that the zone only ever guarantees MEM_ALIGN, which is
+// sizeof(void *) = 4 on this target -- Z_Malloc rounds requests up to 4, so
+// returned pointers were never 8-aligned and the larger header does not
+// change that. Set to 0 for release builds.
 //
 #define ZONE_DEBUG 1
 
@@ -89,8 +91,13 @@ unsigned int Z_ZoneSize(void);
 // On the first failure it prints a full report tagged with 'when' and then
 // stays quiet: subsequent calls return 0 immediately without re-walking, so
 // dropping this in a per-frame path costs nothing once the damage is found
-// and does not turn the console into a firehose. Compiled to a constant 1
-// when ZONE_DEBUG is 0.
+// and does not turn the console into a firehose. When ZONE_DEBUG is 0 this
+// is an out-of-line stub that returns 1 -- the calls and their string
+// literals survive, so remove the call sites too if that ever matters.
+//
+// The return value is advisory. No caller acts on it: this reports, it does
+// not protect. P_SetupLevel still runs Z_FreeTags on a heap this has just
+// declared corrupt.
 int     Z_ValidateHeap (const char *when);
 
 //

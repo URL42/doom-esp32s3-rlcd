@@ -766,9 +766,12 @@ P_SetupLevel
     // Make sure all sounds are stopped before Z_FreeTags.
     S_Start ();
 
-    // This is where the New Game crash lands: Z_FreeTags walks the block list
-    // and faults on a header that was damaged some time earlier. Checking
-    // first turns that into a report naming the damage.
+    // This is where the New Game crash landed: Z_FreeTags walks the block
+    // list and faults on a header that was damaged some time earlier.
+    //
+    // This is a report, NOT a guard. The return value is ignored and
+    // Z_FreeTags runs on the next line regardless -- if the heap is corrupt
+    // it will still fault, just after saying who corrupted it.
     Z_ValidateHeap ("P_SetupLevel, before Z_FreeTags");
 
     Z_FreeTags (PU_LEVEL, PU_PURGELEVEL-1);
