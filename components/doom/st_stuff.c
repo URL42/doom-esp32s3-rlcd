@@ -1426,6 +1426,25 @@ void ST_Stop (void)
 void ST_Init (void)
 {
     ST_loadData();
-    st_backing_screen = (byte *) Z_Malloc(ST_WIDTH * ST_HEIGHT, PU_STATIC, 0);
+
+    // SCREENWIDTH, not ST_WIDTH. ST_WIDTH is 320 -- the width of the sbar
+    // graphic in the WAD -- and in vanilla that is also the screen width, so
+    // the two are interchangeable and nobody noticed which one this wanted.
+    //
+    // It wants the screen width. ST_refreshBackground hands this buffer to
+    // V_UseBuffer and then draws into it with V_DrawPatch, and every writer
+    // in v_video.c strides by SCREENWIDTH regardless of which buffer is
+    // installed. At 400x300 that means the status bar needs 32 * 400 = 12800
+    // bytes and was given 32 * 320 = 10240, so every frame with the status
+    // bar visible wrote 2560 bytes of palette indices off the end of the
+    // allocation and straight through the header of the next zone block.
+    //
+    // That is the New Game crash: the damage happens during ordinary
+    // rendering, and the game only falls over later, when P_SetupLevel calls
+    // Z_FreeTags and the allocator finally walks the list it has been
+    // handed. RANGECHECK could not catch it -- V_DrawPatch validates its
+    // coordinates against the screen, and the coordinates were legal. It was
+    // the buffer that was the wrong size.
+    st_backing_screen = (byte *) Z_Malloc(SCREENWIDTH * ST_HEIGHT, PU_STATIC, 0);
 }
 
