@@ -446,12 +446,18 @@ void D_DoomLoop (void)
 
 		TryRunTics (); // will run at least one tic
 
+		// Bracketing the two halves of the frame separates game logic from
+		// rendering as the source of heap damage. Whichever of these two
+		// fires first is the half to go looking in.
+		Z_ValidateHeap ("after tics");
+
 		S_UpdateSounds (players[consoleplayer].mo);// move positional sounds
 
 		// Update display, next frame, with current state.
 		if (screenvisible)
 		{
 			D_Display ();
+			Z_ValidateHeap ("after display");
 		}
     }
 }

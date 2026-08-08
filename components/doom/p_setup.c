@@ -764,7 +764,12 @@ P_SetupLevel
     players[consoleplayer].viewz = 1; 
 
     // Make sure all sounds are stopped before Z_FreeTags.
-    S_Start ();			
+    S_Start ();
+
+    // This is where the New Game crash lands: Z_FreeTags walks the block list
+    // and faults on a header that was damaged some time earlier. Checking
+    // first turns that into a report naming the damage.
+    Z_ValidateHeap ("P_SetupLevel, before Z_FreeTags");
 
     Z_FreeTags (PU_LEVEL, PU_PURGELEVEL-1);
 

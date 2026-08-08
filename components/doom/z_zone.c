@@ -44,6 +44,16 @@ typedef struct memblock_s
     int			id;	// should be ZONEID
     struct memblock_s*	next;
     struct memblock_s*	prev;
+#if ZONE_DEBUG
+    // Provenance, see the ZONE_DEBUG comment in z_zone.h. 'caller' is the
+    // return address of whoever called Z_Malloc -- run it through
+    // xtensa-esp32s3-elf-addr2line to get file:line. 'seq' is a monotonic
+    // allocation counter, which makes it possible to say whether a block is
+    // ancient (allocated at startup) or was handed out moments before the
+    // heap broke.
+    void*		caller;
+    unsigned		seq;
+#endif
 } memblock_t;
 
 
@@ -62,6 +72,11 @@ typedef struct
 
 
 memzone_t*	mainzone;
+
+#if ZONE_DEBUG
+static unsigned	zone_alloc_seq;
+static int	zone_reported;		// only ever print the first failure
+#endif
 
 
 
@@ -259,7 +274,13 @@ Z_Malloc
         newblock->size = extra;
 	
         newblock->tag = PU_FREE;
-        newblock->user = NULL;	
+        newblock->user = NULL;
+#if ZONE_DEBUG
+        // The fragment is free, so it has no owner. Zeroing rather than
+        // leaving whatever was in the memory keeps the report honest.
+        newblock->caller = NULL;
+        newblock->seq = 0;
+#endif
         newblock->prev = base;
         newblock->next = base->next;
         newblock->next->prev = newblock;
@@ -273,6 +294,15 @@ Z_Malloc
 
     base->user = user;
     base->tag = tag;
+
+#if ZONE_DEBUG
+    // __builtin_return_address(0) is the address Z_Malloc will return to,
+    // i.e. the instruction after the call site. GCC gives us this for free
+    // from the frame, so there is no need to macro-wrap Z_Malloc and touch
+    // its ~200 call sites just to record __FILE__/__LINE__.
+    base->caller = __builtin_return_address(0);
+    base->seq = ++zone_alloc_seq;
+#endif
 
     result  = (void *) ((byte *)base + sizeof(memblock_t));
 
@@ -419,6 +449,175 @@ void Z_CheckHeap (void)
 	    I_Error ("Z_CheckHeap: two consecutive free blocks\n");
     }
 }
+
+
+#if ZONE_DEBUG
+
+//
+// Z_ValidateHeap
+//
+// Z_CheckHeap trusts the list it is checking: it dereferences block->next
+// before it has established that block->next is a plausible pointer, so a
+// heap that has already been damaged kills the checker rather than being
+// reported by it. This version validates every pointer before following it.
+//
+
+static int Z_BlockInZone (const memblock_t *block)
+{
+    const byte *lo = (const byte *)mainzone;
+    const byte *hi = lo + mainzone->size;
+    const byte *p  = (const byte *)block;
+
+    if (p < lo || p + sizeof(memblock_t) > hi)
+	return 0;
+
+    if (((size_t)p & (MEM_ALIGN - 1)) != 0)
+	return 0;
+
+    return 1;
+}
+
+static void Z_DumpBlock (const char *label, const memblock_t *block)
+{
+    if (block == NULL)
+    {
+	printf ("  %-4s @ (null)\n", label);
+	return;
+    }
+
+    if (!Z_BlockInZone (block))
+    {
+	printf ("  %-4s @ %p  outside the zone -- not dereferenced\n",
+		label, (const void *)block);
+	return;
+    }
+
+    printf ("  %-4s @ %p  size=%-7d tag=%d id=0x%06x user=%p\n",
+	    label, (const void *)block, block->size, block->tag,
+	    (unsigned)block->id, (const void *)block->user);
+    printf ("         next=%p prev=%p  data=%p..%p  seq=%u caller=%p\n",
+	    (const void *)block->next, (const void *)block->prev,
+	    (const void *)((const byte *)block + sizeof(memblock_t)),
+	    (const void *)((const byte *)block + block->size),
+	    block->seq, block->caller);
+
+    // The raw header matters as much as the decoded one: it shows which
+    // fields survived. A linear overrun smears every word from the top; a
+    // stray write leaves all but one intact.
+    {
+	const unsigned *w = (const unsigned *)block;
+	unsigned i;
+
+	printf ("         raw ");
+	for (i = 0 ; i < sizeof(memblock_t) / sizeof(unsigned) ; i++)
+	    printf ("%08x ", w[i]);
+	printf ("\n");
+    }
+}
+
+int Z_ValidateHeap (const char *when)
+{
+    memblock_t*		block;
+    memblock_t*		prev;
+    const char*		reason = NULL;
+    int			count = 0;
+
+    // One report is the whole point. After that this is a no-op so it can sit
+    // in a per-frame path without flooding the console or slowing the game
+    // down while we read the first one.
+    if (zone_reported)
+	return 0;
+
+    if (mainzone == NULL)
+	return 1;
+
+    prev = &mainzone->blocklist;
+    block = mainzone->blocklist.next;
+
+    while (block != &mainzone->blocklist)
+    {
+	if (!Z_BlockInZone (block))
+	{
+	    reason = "next does not point at a block inside the zone";
+	    break;
+	}
+
+	if (block->prev != prev)
+	{
+	    reason = "back link does not point at the previous block";
+	    break;
+	}
+
+	if (block->size <= (int)sizeof(memblock_t)
+	 || (byte *)block + block->size > (byte *)mainzone + mainzone->size)
+	{
+	    reason = "size is impossible";
+	    break;
+	}
+
+	if (block->tag < PU_STATIC || block->tag >= PU_NUM_TAGS)
+	{
+	    reason = "tag is out of range";
+	    break;
+	}
+
+	if (block->tag != PU_FREE && block->id != ZONEID)
+	{
+	    reason = "allocated block has lost its ZONEID";
+	    break;
+	}
+
+	// Blocks are contiguous, except that the last one runs to the end of
+	// the zone and wraps to the list head rather than to its neighbour.
+	if (block->next != &mainzone->blocklist
+	 && (byte *)block + block->size != (byte *)block->next)
+	{
+	    reason = "block does not touch the next block";
+	    break;
+	}
+
+	// A corrupt next could point backwards and loop forever.
+	if (++count > (1 << 20))
+	{
+	    reason = "block list does not terminate";
+	    break;
+	}
+
+	prev = block;
+	block = block->next;
+    }
+
+    if (reason == NULL)
+	return 1;
+
+    zone_reported = 1;
+
+    printf ("\n===== ZONE HEAP CORRUPT (%s) =====\n", when);
+    printf ("  zone @ %p size=%d  intact blocks=%d  allocations so far=%u\n",
+	    (void *)mainzone, mainzone->size, count, zone_alloc_seq);
+    printf ("  reason: %s\n", reason);
+    Z_DumpBlock ("bad", block);
+    Z_DumpBlock ("prev", prev);
+    printf ("  Reading this: if 'bad' is damaged from its first word onwards,\n"
+	    "  'prev' overran its buffer -- decode prev's caller with\n"
+	    "  addr2line. If only one field of 'bad' is wrong and the rest is\n"
+	    "  intact, nothing overran anything: a stray pointer wrote those\n"
+	    "  four bytes and 'prev' is innocent.\n");
+    printf ("===== end =====\n\n");
+    fflush (stdout);
+
+    return 0;
+}
+
+#else
+
+int Z_ValidateHeap (const char *when)
+{
+    (void) when;
+    return 1;
+}
+
+#endif // ZONE_DEBUG
 
 
 
