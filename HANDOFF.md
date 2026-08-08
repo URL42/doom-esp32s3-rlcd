@@ -1,9 +1,7 @@
 # Session handoff — DOOM on ESP32-S3-RLCD-4.2
 
 Paste this into a new session to resume without re-deriving anything.
-Repo: <https://github.com/URL42/doom-esp32s3-rlcd>. Everything below is committed on
-`fix/new-game-crash-status-bar-overrun`; check whether that has been merged and pushed
-before assuming `main` has it.
+Repo: <https://github.com/URL42/doom-esp32s3-rlcd> — everything below is committed and pushed.
 
 ---
 
