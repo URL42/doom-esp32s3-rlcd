@@ -1435,9 +1435,15 @@ void ST_Init (void)
     // V_UseBuffer and then draws into it with V_DrawPatch, and every writer
     // in v_video.c strides by SCREENWIDTH regardless of which buffer is
     // installed. At 400x300 that means the status bar needs 32 * 400 = 12800
-    // bytes and was given 32 * 320 = 10240, so every frame with the status
-    // bar visible wrote 2560 bytes of palette indices off the end of the
-    // allocation and straight through the header of the next zone block.
+    // bytes and was given 32 * 320 = 10240.
+    //
+    // The sbar patch is 320 wide drawn at ST_X = 40, so it touches offsets
+    // up to 31 * 400 + 359 = 12759: rows 26-31 entirely and part of row 25,
+    // 2040 bytes past the end of the allocation and straight through the
+    // header of the next zone block, every frame the status bar was visible.
+    // (The 2560-byte figure is the shortfall in the allocation, not what was
+    // written.) V_CopyRect on the way back out then read those same 2040
+    // bytes of somebody else's memory, the quieter half of the same bug.
     //
     // That is the New Game crash: the damage happens during ordinary
     // rendering, and the game only falls over later, when P_SetupLevel calls

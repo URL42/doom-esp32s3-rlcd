@@ -49,9 +49,15 @@ Performance, measured per frame: **dither 6.8 ms, flush 17.5 ms, ~27 fps**
 320 × 32 = 10240 bytes. But `ST_refreshBackground` installs that buffer with
 `V_UseBuffer` and then draws into it with `V_DrawPatch`, and **every writer in
 `v_video.c` strides by `SCREENWIDTH`** regardless of which buffer is installed. At
-400×300 the status bar needs 32 × 400 = 12800 bytes. It had 10240, so every frame with
-the status bar visible wrote 2560 bytes of palette indices off the end of the allocation
-and straight through the header of the next zone block.
+400×300 the status bar needs 32 × 400 = 12800 bytes. It had 10240.
+
+The `sbar` patch is 320 wide drawn at `ST_X` = 40, so it reaches offset 31 × 400 + 359 =
+12759 — rows 26–31 entirely plus part of row 25, **2040 bytes past the end of the
+allocation and straight through the header of the next zone block**, on every frame the
+status bar was visible. (2560 is the shortfall in the allocation, not what was written.)
+`V_CopyRect` on the way back out then read those same 2040 bytes of somebody else's
+memory — the quieter half of the same bug, and one that would have produced garbage
+pixels in the status bar rather than a crash.
 
 `ST_WIDTH` is the width of the `sbar` graphic in the WAD. In vanilla that is also the
 screen width, so the two are interchangeable and nobody ever had to decide which one that
@@ -122,6 +128,16 @@ Note that #6 is a nastier variant than #1–#5: the constant was not a limit or 
 coordinate, it was a **buffer size that had to agree with a stride computed somewhere
 else**. Grep for other allocations sized from anything other than `SCREENWIDTH` that are
 then written through `v_video.c`.
+
+That grep has been done once: `st_backing_screen` and `background_buffer` (`r_draw.c`)
+are the only two buffers ever handed to `V_UseBuffer`, and every other screen-sized
+allocation already uses `SCREENWIDTH`. **`background_buffer` is safe, but only just, and
+not for a good reason.** It is 400 × 268, and the deepest write is the `brdr_b` patch at
+`viewwindowy + viewheight`, 8 rows tall. At `setblocks` = 9 that is rows 254–261 against
+268 available — six rows of margin. At `setblocks` = 10 it would be rows 266–273 into a
+268-row buffer, and the only thing preventing that is `R_FillBackScreen` early-returning
+when `scaledviewwidth == SCREENWIDTH`. Anything that changes the view-size logic needs to
+re-check this.
 
 ---
 
