@@ -154,6 +154,26 @@ If you have more than one ESP-IDF installed, a stale `IDF_PATH` in your shell wi
 make `export.sh` pick the wrong Python environment and fail with missing packages.
 `unset IDF_PATH` first if that happens.
 
+A different and more confusing failure looks like this:
+
+```
+'~/.espressif/python_env/idf5.4_py3.14_env/bin/python' is currently active in the
+environment while the project was configured with
+'~/.espressif/python_env/idf5.5_py3.14_env/bin/python'. Run 'idf.py fullclean' to
+start again.
+```
+
+That is not a stale `IDF_PATH` and `unset IDF_PATH` will not fix it — you have
+sourced the `export.sh` of the wrong ESP-IDF *version*. The build is configured
+against v5.5.2 and something else is at the path you activated. Do not run
+`fullclean` as the message suggests; source the matching version instead. IDF
+Tools installs land under `~/.espressif/`, so:
+
+```bash
+ls -d ~/.espressif/v*/esp-idf
+. ~/.espressif/v5.5.2/esp-idf/export.sh
+```
+
 ### 2. Build
 
 ```bash

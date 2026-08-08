@@ -1,17 +1,26 @@
 # Session handoff — DOOM on ESP32-S3-RLCD-4.2
 
 Paste this into a new session to resume without re-deriving anything.
-Repo: <https://github.com/URL42/doom-esp32s3-rlcd> — everything below is committed and pushed.
+Repo: <https://github.com/URL42/doom-esp32s3-rlcd>. Everything below is committed on
+`fix/new-game-crash-status-bar-overrun`; check whether that has been merged and pushed
+before assuming `main` has it.
 
 ---
 
 ## Where the project is
 
 Doom runs on the board: full 400×300 on the reflective panel, correct orientation,
-calibrated tone, ~27 fps, savegames persisting, BLE controller pairing. The demo plays
-indefinitely without crashing.
+calibrated tone, ~27 fps, savegames persisting, BLE controller pairing.
 
-**The headline bug: starting a New Game crashes the board.** Diagnosed, not fixed — see below.
+**The New Game crash is fixed** — see below. It was a status bar buffer allocated 320
+bytes per row on a 400-wide screen, overrunning the zone heap on every frame the status
+bar was visible. Verified on hardware: 40+ seconds of play past New Game, no panic, no
+heap corruption reported, steady 27.97 fps.
+
+Note the correction to the previous handoff: the demo did **not** play "indefinitely
+without crashing". The heap was already corrupt roughly 250 frames into the first demo;
+a reboot back into the demo loop is indistinguishable from the demo looping normally,
+which is exactly how it hid.
 
 ### Working and verified on hardware
 
@@ -34,57 +43,65 @@ Performance, measured per frame: **dither 6.8 ms, flush 17.5 ms, ~27 fps**
 
 ---
 
-## THE BUG TO FIX FIRST
+## THE NEW GAME CRASH — SOLVED
 
-**Symptom:** select New Game from the menu → board reboots → comes up in the demo.
-It looks like "the demo restarted"; it is actually a crash and reboot.
+**Cause:** `ST_Init` allocated `st_backing_screen` as `ST_WIDTH * ST_HEIGHT` =
+320 × 32 = 10240 bytes. But `ST_refreshBackground` installs that buffer with
+`V_UseBuffer` and then draws into it with `V_DrawPatch`, and **every writer in
+`v_video.c` strides by `SCREENWIDTH`** regardless of which buffer is installed. At
+400×300 the status bar needs 32 × 400 = 12800 bytes. It had 10240, so every frame with
+the status bar visible wrote 2560 bytes of palette indices off the end of the allocation
+and straight through the header of the next zone block.
 
-**This is not a menu bug.** The menu works. `G_DoNewGame` is reached (verified by
-instrumenting it). The board then panics:
+`ST_WIDTH` is the width of the `sbar` graphic in the WAD. In vanilla that is also the
+screen width, so the two are interchangeable and nobody ever had to decide which one that
+line meant. It meant the screen. One-line fix in `st_stuff.c`.
+
+**Why the crash surfaced where it did.** The damage happens during ordinary rendering.
+The game only falls over later, when `P_SetupLevel` calls `Z_FreeTags` and the allocator
+finally walks the list it has been handed. The stack trace pointed at the allocator
+because the allocator is the only thing that reads those headers — it was the victim, not
+the scene.
+
+**Why `RANGECHECK` did not catch it.** `V_DrawPatch` validates its *coordinates* against
+the screen, and the coordinates were entirely legal. It was the buffer that was the wrong
+size, and nothing in the codebase knows how big `dest_screen` is. Do not expect
+`RANGECHECK` to catch this class of bug.
+
+### The previous handoff's prime suspect was wrong
+
+`MAXSEGS` / `solidsegs` was the stated prime suspect. It is not, and the linker map says
+why in about thirty seconds:
 
 ```
-Guru Meditation Error: Core 0 panic'ed (LoadProhibited)
-EXCVADDR: 0x00000008
-
-Z_FreeTags      z_zone.c:306
-P_SetupLevel    p_setup.c:769
-G_DoLoadLevel   g_game.c:655
-G_InitNew       g_game.c:1889
-G_DoNewGame     g_game.c:1722
+.bss.solidsegs  0x3fcac8c8  0x100
+.bss.newend     0x3fcac9c8  0x4
+.bss.ds_p       0x3fcac9cc  0x4
+.bss.drawsegs   0x3fcac9d0  0x4
 ```
 
-`P_SetupLevel` calls `Z_FreeTags` to release the previous level. The zone block list is
-corrupt — a `block->next` is NULL, so reading `block->tag` faults at offset 8. Corruption
-only visible when the allocator walks its list means **something overran a heap buffer
-earlier, silently, during demo playback**.
+`solidsegs` is in **internal SRAM** (`0x3fc…`) and the zone is in **PSRAM** (`0x3c…`).
+The values it spills are screen x-coordinates, which cannot be mistaken for a PSRAM
+address, so it can never damage a zone block header. Worse for the theory: `newend`,
+`ds_p` and `drawsegs` sit immediately behind the array, so the first overrun destroys the
+pointer doing the overrunning and faults instantly rather than corrupting anything
+quietly. It was also never actually overflowing — the guard added below did not fire once
+across two full runs.
 
-### Prime suspect: `solidsegs` overflow in `r_bsp.c`
+**Check the linker map before theorising about memory corruption.** Which region a symbol
+lives in usually eliminates most of the candidate list for free.
 
-```c
-#define MAXSEGS  32
-cliprange_t solidsegs[MAXSEGS];   // plain global, in .bss
-...
-newend++;                          // line ~122, NO bounds check anywhere
-```
+`MAXSEGS` was fixed anyway (scaled from `SCREENWIDTH`, plus the bounds guard vanilla never
+had) because it is a real unguarded overflow. Just not that one.
 
-`MAXSEGS` is referenced exactly twice: the declaration and the array init. There is **no
-guard on `newend`**. This is a known vanilla Doom overflow (`R_ClipSolidWallSegment`) and it
-scales with how many distinct wall segments are visible — which rises with a wider view. At
-320×200 you rarely reach 32; at 400 wide you plausibly do. Overrunning a `.bss` global writes
-into whatever follows it, which is exactly this signature.
-
-**Suggested fix:** raise `MAXSEGS` to ~128, or scale it from `SCREENWIDTH`. Then flash and
-try New Game. If it still crashes, add a guard in `R_ClipSolidWallSegment` that drops the
-segment rather than overrunning, and check whether the crash moves.
-
-**Already ruled out:** `MAXOPENINGS` (fixed anyway — it was genuinely wrong, see below),
+**Also ruled out, still true:** `MAXOPENINGS` (fixed separately — it was genuinely wrong),
 `MAXDRAWSEGS` (guarded at `r_segs.c:383`), `MAXVISSPRITES` (guarded, returns an overflow
 sprite), `MAXVISPLANES` (guarded, "no more visplanes"), `storedemo` (only set for Doom II
 without MAP01).
 
 ### This is a recurring pattern — expect more of it
 
-Five instances found so far of a bare 320×200 constant surviving the resolution change:
+Six instances found so far of a bare 320×200 constant surviving the resolution change:
 
 1. **Status bar coordinates** — absolute positions baked for a 200-tall screen; caused an
    `I_Error` on every boot at 400×300. Fixed with `ST_XSHIFT`/`ST_YSHIFT`.
@@ -95,9 +112,64 @@ Five instances found so far of a bare 320×200 constant surviving the resolution
 4. **`MAXOPENINGS`** — was `SCREENWIDTH*64`, where 64 is tuned for a 200-tall screen;
    consumption scales with *height*. Now scaled by `SCREENHEIGHT/200`. (Latent bug, not the
    crash cause.)
-5. **`MAXSEGS`** — suspected, above.
+5. **`MAXSEGS`** — 32 was a 320-wide number. Now `SCREENWIDTH/2 + 2`, with the bounds
+   guard vanilla never had. Latent; was not overflowing in practice.
+6. **`st_backing_screen`** — allocated `ST_WIDTH`-strided, written `SCREENWIDTH`-strided.
+   **This was the New Game crash.**
 
 When something breaks at 400×300, look for a hardcoded constant before anything else.
+Note that #6 is a nastier variant than #1–#5: the constant was not a limit or a
+coordinate, it was a **buffer size that had to agree with a stride computed somewhere
+else**. Grep for other allocations sized from anything other than `SCREENWIDTH` that are
+then written through `v_video.c`.
+
+---
+
+## The heap validator — use this, do not re-derive it
+
+`ZONE_DEBUG` in `z_zone.h` (currently **on**) buys two things:
+
+- **Per-block provenance.** Every `memblock_t` carries the return address of whoever
+  called `Z_Malloc` (via `__builtin_return_address(0)`, so no macro-wrapping of ~200 call
+  sites) plus a monotonic allocation sequence number. Header grows 24 → 32 bytes.
+- **`Z_ValidateHeap(const char *when)`.** Walks the block list range-checking every
+  pointer *before* dereferencing it, so a corrupt heap produces a report instead of a
+  second crash on top of the first. Reports once, then goes quiet, so it is safe to leave
+  in a per-frame path. Vanilla's `Z_CheckHeap` cannot do this — it trusts the list it is
+  checking and dies on the way to telling you anything.
+
+Called from `D_DoomLoop` after tics and again after display (which half of the frame did
+it), and from `P_SetupLevel` before `Z_FreeTags`.
+
+**Reading a report.** If the damaged header is trashed from its first word onwards, the
+block in front of it overran its buffer — decode that block's `caller`:
+
+```bash
+xtensa-esp32s3-elf-addr2line -pfiaC -e build/esp_doom_rlcd.elf 0x42017bf1
+```
+
+If instead only one field is wrong and the rest of the header is intact, nothing overran
+anything: a stray pointer wrote four bytes, and the preceding block is innocent. Different
+hunt entirely.
+
+Measured cost: none detectable — 27.97 fps with it on, against 27.83 before. **Leave it
+on.** The 320×200 constant problem is not finished, and this turns the next instance from
+a session of guessing into one flash cycle.
+
+### Driving the board from a script
+
+The menu can be walked over USB-Serial-JTAG without touching the controller, which makes
+crash reproduction deterministic and repeatable. `0x1b` is Escape and `\r` is Enter
+(`doomgeneric_rlcd.c`), and neither is intercepted by the tuning-key layer. Reset via
+pyserial — on USB-Serial-JTAG, RTS drives CHIP_PU and DTR drives GPIO0, so hold DTR low so
+it boots the app rather than the ROM loader:
+
+```python
+ser.dtr = False; ser.rts = True; time.sleep(0.2); ser.rts = False
+```
+
+Then: log for 60 s of demo, send `\x1b`, `\r`, `\r`, `\r` with ~2 s between, keep logging.
+That is the whole New Game reproduction.
 
 ---
 
@@ -133,10 +205,14 @@ run the same duration.
 
 ## Suggested order of work
 
-1. **Fix the New Game crash** (`MAXSEGS`). Highest value — it is the difference between a demo
-   reel and a playable game.
-2. **Verify the controller end to end** — pairing works and keys arrive, but nobody has played
-   it since the input race and lag fixes landed.
+1. **Play it.** The New Game crash is fixed and verified over serial, but "no panic and a
+   steady frame rate" is not the same as "the status bar draws correctly and the player
+   responds". Look at the panel. This is also the outstanding end-to-end check on the BLE
+   controller — pairing works and keys arrive, but nobody has actually played it since the
+   input race and lag fixes landed.
+2. **`R_MapPlane: degenerate span 374,332 at 255`** still fires once per run, still
+   mitigated by skipping, still undiagnosed. Instance #3 above. Now that the heap is clean
+   it is the loudest remaining "something still thinks the screen is 320 wide" signal.
 3. **Audio.** Reference implementation identified: `kodediy/kodedot_examples`, `Doom/main/doom_sound.c`.
    Lift the DMX header parse (u16 format=3, u16 rate, u32 samples, **16-byte guard pads front
    and back** — miss those and every sound clicks), the 8-channel mixer with int32 accumulate
@@ -189,6 +265,13 @@ IDF_PATH` first. `sdkconfig` silently wins over `sdkconfig.defaults`; delete `sd
 `idf.py reconfigure` after editing defaults. Arduino IDE's Serial Monitor and leftover `screen`
 sessions grab the port — `lsof /dev/cu.usbmodem101` finds the holder.
 
+**The IDF this project actually builds with is `~/.espressif/v5.5.2/esp-idf`, not
+`~/esp/esp-idf`** (which on this machine is v5.4). Sourcing the wrong one gives "…
+idf5.4_py3.14_env is currently active while the project was configured with …
+idf5.5_py3.14_env … Run 'idf.py fullclean' to start again." That is *not* the stale
+`IDF_PATH` trap above and `unset IDF_PATH` will not fix it — and do not run `fullclean` as
+the message suggests. Source the matching version.
+
 ---
 
 ## Working practices that mattered
@@ -211,3 +294,14 @@ board immediately disproved that.
 bugs came from lifting a detail while leaving the surrounding mechanism behind — the manual CS
 line, the display inversion bit, the gate voltage, and the row-addressed write were all in
 files already open.
+
+**Build the instrument, not the next hypothesis.** The New Game crash had survived a
+prime suspect and two "fixed anyway" constants. What killed it was ~150 lines that made
+the heap report who damaged it — one build, one flash, one run, and the answer was a
+filename and a line number rather than another candidate. Two guesses cost more than the
+tool did. When a bug has already survived one hypothesis, stop generating hypotheses.
+
+**A confident handoff is still a hypothesis.** The previous session's prime suspect was
+written up with a mechanism, a suggested fix, and a ruled-out list — and it was wrong, in
+a way one look at the linker map would have shown. Inherited diagnoses deserve the same
+scepticism as fresh ones; the confident prose is not evidence.
