@@ -82,7 +82,22 @@ typedef	struct
 } cliprange_t;
 
 
-#define MAXSEGS		32
+// Vanilla's 32 was a 320-wide number, and like every other bare constant in
+// this renderer it does not survive the move to 400. The true bound is one
+// range per two columns -- each range needs at least one column and at least
+// one column of gap before the next -- plus the two sentinels that
+// R_ClearClipSegs installs. At 400 that is 202 entries, 1616 bytes of .bss,
+// which is not worth economising on.
+//
+// This array is NOT the cause of the New Game crash, despite looking like a
+// good candidate. It lives in internal SRAM and the zone lives in PSRAM, and
+// the values it would spill are screen x-coordinates, which cannot be
+// mistaken for a PSRAM address. Worse, the linker puts newend, ds_p and
+// drawsegs immediately after it, so the first overrun destroys the pointer
+// doing the overrunning and faults instantly rather than corrupting anything
+// quietly. It is fixed here because it is a real unguarded overflow, not
+// because it explains that bug.
+#define MAXSEGS		(SCREENWIDTH / 2 + 2)
 
 // newend is one past the last valid seg
 cliprange_t*	newend;
@@ -118,9 +133,28 @@ R_ClipSolidWallSegment
 	    // Post is entirely visible (above start),
 	    //  so insert a new clippost.
 	    R_StoreWallRange (first, last);
+
+	    // Vanilla has no bounds check here whatsoever. The wall has
+	    // already been drawn by this point; all that is lost by bailing
+	    // out is recording it as solid, so geometry behind it may be
+	    // drawn over for one frame. That is a far better outcome than
+	    // walking newend off the end of solidsegs.
+	    if (newend >= solidsegs + MAXSEGS)
+	    {
+		static boolean warned = false;
+		if (!warned)
+		{
+		    warned = true;
+		    printf("R_ClipSolidWallSegment: solidsegs full at %d "
+			   "(dropping clip range; further occurrences "
+			   "silent)\n", MAXSEGS);
+		}
+		return;
+	    }
+
 	    next = newend;
 	    newend++;
-	    
+
 	    while (next != start)
 	    {
 		*next = *(next-1);
